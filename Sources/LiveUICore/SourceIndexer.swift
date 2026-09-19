@@ -51,9 +51,17 @@ public enum SourceIndexer {
         for (childIndex, child) in node.children(viewMode: .sourceAccurate).enumerated() {
             let childPath = path.appending(childIndex)
             if let call = child.as(FunctionCallExprSyntax.self), let name = viewTypeName(of: call) {
+                // `call` here may be the *outermost* call in a modifier chain
+                // (e.g. the `.padding()` in `VStack(spacing: 20) { ... }.padding()`).
+                // The node itself — the thing with `spacing`/`width`/etc.
+                // arguments — is the root initializer call underneath any
+                // chained modifiers, so that's what gets indexed and recursed
+                // into. Modifiers are found later, on demand, by walking
+                // *outward* from this root call (see SwiftSyntaxEngine).
+                let rootCall = rootCallExpr(of: call)
                 let nodeID = ViewNodeID(file: filePath, path: childPath, typeName: name)
-                let nested = collectViewCalls(in: Syntax(call), filePath: filePath, path: childPath)
-                results.append(IndexedNode(id: nodeID, callExpression: call, children: nested))
+                let nested = collectViewCalls(in: Syntax(rootCall), filePath: filePath, path: childPath)
+                results.append(IndexedNode(id: nodeID, callExpression: rootCall, children: nested))
             } else {
                 results.append(contentsOf: collectViewCalls(in: child, filePath: filePath, path: childPath))
             }
@@ -82,5 +90,17 @@ public enum SourceIndexer {
             return decl.baseName.text
         }
         return nil
+    }
+
+    /// Walks a modifier chain (`Foo(...).bar().baz()`) down to the actual
+    /// initializer call (`Foo(...)`) and returns *that node* — as opposed
+    /// to `rootIdentifier`, which only returns its name.
+    private static func rootCallExpr(of call: FunctionCallExprSyntax) -> FunctionCallExprSyntax {
+        if let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+           let base = member.base,
+           let baseCall = base.as(FunctionCallExprSyntax.self) {
+            return rootCallExpr(of: baseCall)
+        }
+        return call
     }
 }
