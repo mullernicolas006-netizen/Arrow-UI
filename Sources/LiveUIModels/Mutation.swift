@@ -39,6 +39,33 @@ public struct ViewNodeID: Codable, Hashable, CustomStringConvertible, Sendable {
     }
 
     public var description: String { "\(typeName)@\(file)#\(path)" }
+
+    /// The parsed pieces of a `ViewNodeID.description` string, as reported
+    /// by the runtime over the wire (`RuntimeViewInfo.id`). Kept separate
+    /// from `ViewNodeID` itself because the runtime's `file` is whatever
+    /// literal string a hand-written `.liveUITag(file:...)` call used
+    /// (commonly just a bare filename), which generally will *not* match
+    /// `SourceIndexer`'s `file` (the full absolute path it read from disk)
+    /// — callers should compare `file` loosely (e.g. by last path
+    /// component), not with `==`.
+    public struct RuntimeIDComponents {
+        public let typeName: String
+        public let file: String
+        public let path: StructuralPath
+    }
+
+    public static func parse(runtimeDescription: String) -> RuntimeIDComponents? {
+        guard let atIndex = runtimeDescription.firstIndex(of: "@"),
+              let hashIndex = runtimeDescription.lastIndex(of: "#"),
+              atIndex < hashIndex else {
+            return nil
+        }
+        let typeName = String(runtimeDescription[runtimeDescription.startIndex..<atIndex])
+        let file = String(runtimeDescription[runtimeDescription.index(after: atIndex)..<hashIndex])
+        let pathString = runtimeDescription[runtimeDescription.index(after: hashIndex)...]
+        let components = pathString.split(separator: ".").compactMap { Int($0) }
+        return RuntimeIDComponents(typeName: typeName, file: file, path: StructuralPath(components))
+    }
 }
 
 /// A literal value that can be written into (or read out of) a Swift source

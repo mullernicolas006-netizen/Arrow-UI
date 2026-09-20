@@ -114,6 +114,8 @@ struct OverlayView: View {
                         dragStartRuntimeID = hitID
                         if let node = state.node(forRuntimeID: hitID) {
                             state.selection = node.id
+                        } else {
+                            state.lastError = "Couldn't match runtime view '\(hitID)' back to a node in the indexed source — check that its .liveUITag(file:) matches the file SourceIndexer sees."
                         }
                     }
                 }
@@ -124,7 +126,8 @@ struct OverlayView: View {
                     dragStartRuntimeID = nil
                     dragTranslation = .zero
                 }
-                guard let hitID = dragStartRuntimeID, let node = state.node(forRuntimeID: hitID) else { return }
+                guard let hitID = dragStartRuntimeID else { return }
+                guard let node = state.node(forRuntimeID: hitID) else { return }
 
                 let axis: DragIntent.Axis = abs(value.translation.width) > abs(value.translation.height) ? .horizontal : .vertical
                 let rawDelta = axis == .horizontal ? value.translation.width : value.translation.height

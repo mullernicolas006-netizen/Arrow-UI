@@ -134,17 +134,29 @@ public final class AppState: ObservableObject {
     /// as sent in `RuntimeViewInfo`) back to the `IndexedNode` it came
     /// from, so the canvas can turn "the box the user just clicked" into
     /// something `LayoutEngine`/`MutationEngine` can act on.
+    ///
+    /// Matches on type name + structural path + filename-only (ignoring
+    /// directory), not full-string equality against `ViewNodeID
+    /// .description` — a hand-written `.liveUITag(file: "ContentView.swift")`
+    /// call reports just a bare filename, while `SourceIndexer` computes
+    /// each node's `file` as the full absolute path it read from disk, so
+    /// those two will essentially never match exactly.
     public func node(forRuntimeID runtimeID: String) -> IndexedNode? {
+        guard let parsed = ViewNodeID.parse(runtimeDescription: runtimeID) else { return nil }
         for index in fileIndexes.values {
-            if let found = search(runtimeID, in: index.roots) { return found }
+            if let found = search(parsed, in: index.roots) { return found }
         }
         return nil
     }
 
-    private func search(_ runtimeID: String, in nodes: [IndexedNode]) -> IndexedNode? {
+    private func search(_ parsed: ViewNodeID.RuntimeIDComponents, in nodes: [IndexedNode]) -> IndexedNode? {
         for node in nodes {
-            if node.id.description == runtimeID { return node }
-            if let found = search(runtimeID, in: node.children) { return found }
+            if node.id.typeName == parsed.typeName,
+               node.id.path == parsed.path,
+               (node.id.file as NSString).lastPathComponent == (parsed.file as NSString).lastPathComponent {
+                return node
+            }
+            if let found = search(parsed, in: node.children) { return found }
         }
         return nil
     }
