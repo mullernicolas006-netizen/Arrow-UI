@@ -135,29 +135,39 @@ public final class AppState: ObservableObject {
     /// from, so the canvas can turn "the box the user just clicked" into
     /// something `LayoutEngine`/`MutationEngine` can act on.
     ///
-    /// Matches on type name + structural path + filename-only (ignoring
-    /// directory), not full-string equality against `ViewNodeID
-    /// .description` — a hand-written `.liveUITag(file: "ContentView.swift")`
-    /// call reports just a bare filename, while `SourceIndexer` computes
-    /// each node's `file` as the full absolute path it read from disk, so
-    /// those two will essentially never match exactly.
+    /// Two-tier match, both ignoring the `file` component's directory
+    /// (a hand-written `.liveUITag(file: "ContentView.swift")` call reports
+    /// just a bare filename, while `SourceIndexer` computes each node's
+    /// `file` as the full absolute path it read from disk):
+    ///  1. Exact: type name + structural path + filename.
+    ///  2. Fallback: type name + filename alone, but *only* when that's
+    ///     unambiguous (exactly one node of that type in the file) — a
+    ///     hand-typed `.liveUITag(path:)` is realistic to get wrong (the
+    ///     real structural paths SourceIndexer computes are long and not
+    ///     hand-predictable), so this lets manual tagging work today
+    ///     without requiring the exact path, without ever guessing between
+    ///     multiple same-typed views.
     public func node(forRuntimeID runtimeID: String) -> IndexedNode? {
         guard let parsed = ViewNodeID.parse(runtimeDescription: runtimeID) else { return nil }
+        var exactMatch: IndexedNode?
+        var typeMatches: [IndexedNode] = []
         for index in fileIndexes.values {
-            if let found = search(parsed, in: index.roots) { return found }
+            collect(parsed, in: index.roots, exact: &exactMatch, typeMatches: &typeMatches)
         }
-        return nil
+        return exactMatch ?? (typeMatches.count == 1 ? typeMatches[0] : nil)
     }
 
-    private func search(_ parsed: ViewNodeID.RuntimeIDComponents, in nodes: [IndexedNode]) -> IndexedNode? {
+    private func collect(_ parsed: ViewNodeID.RuntimeIDComponents, in nodes: [IndexedNode], exact: inout IndexedNode?, typeMatches: inout [IndexedNode]) {
         for node in nodes {
-            if node.id.typeName == parsed.typeName,
-               node.id.path == parsed.path,
-               (node.id.file as NSString).lastPathComponent == (parsed.file as NSString).lastPathComponent {
-                return node
+            let sameFile = (node.id.file as NSString).lastPathComponent == (parsed.file as NSString).lastPathComponent
+            if node.id.typeName == parsed.typeName, sameFile {
+                if node.id.path == parsed.path {
+                    exact = node
+                } else {
+                    typeMatches.append(node)
+                }
             }
-            if let found = search(parsed, in: node.children) { return found }
+            collect(parsed, in: node.children, exact: &exact, typeMatches: &typeMatches)
         }
-        return nil
     }
 }
