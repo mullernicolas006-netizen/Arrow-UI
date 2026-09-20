@@ -55,6 +55,7 @@ public final class BridgeClient: ObservableObject {
 
     private func attemptConnection() {
         receiveBuffer = Data()
+        print("[LiveUI] BridgeClient: attempting to connect to \(host):\(port)…")
         let connection = NWConnection(host: host, port: port, using: .tcp)
         self.connection = connection
 
@@ -63,13 +64,20 @@ public final class BridgeClient: ObservableObject {
             DispatchQueue.main.async { self.isConnected = (state == .ready) }
             switch state {
             case .ready:
+                print("[LiveUI] BridgeClient: connected.")
                 self.send(.hello(
                     appName: self.appName,
                     bundleIdentifier: self.bundleIdentifier,
                     screenWidth: self.screenSize.width,
                     screenHeight: self.screenSize.height
                 ))
-            case .failed, .cancelled:
+            case .waiting(let error):
+                print("[LiveUI] BridgeClient: waiting — \(error)")
+            case .failed(let error):
+                print("[LiveUI] BridgeClient: failed — \(error)")
+                self.scheduleReconnect()
+            case .cancelled:
+                print("[LiveUI] BridgeClient: cancelled.")
                 self.scheduleReconnect()
             default:
                 break

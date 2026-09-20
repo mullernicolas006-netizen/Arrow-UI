@@ -17,10 +17,15 @@ public final class BridgeServer: ObservableObject {
     public func start(port: UInt16 = 51820) throws {
         let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port) ?? 51820)
         listener.newConnectionHandler = { [weak self] connection in
+            print("[LiveUI] BridgeServer: incoming connection from \(connection.endpoint)")
             self?.accept(connection)
+        }
+        listener.stateUpdateHandler = { state in
+            print("[LiveUI] BridgeServer: listener state -> \(state)")
         }
         listener.start(queue: .main)
         self.listener = listener
+        print("[LiveUI] BridgeServer: listening on port \(port)")
     }
 
     public func stop() {
@@ -49,6 +54,7 @@ public final class BridgeServer: ObservableObject {
         connectedAppCount = connections.count
 
         connection.stateUpdateHandler = { [weak self] state in
+            print("[LiveUI] BridgeServer: connection \(key) state -> \(state)")
             switch state {
             case .failed, .cancelled:
                 self?.remove(key)
