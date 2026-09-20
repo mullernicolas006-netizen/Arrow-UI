@@ -59,6 +59,9 @@ struct OverlayView: View {
                 .frame(width: 8, height: 8)
             Text(state.isRuntimeConnected ? "Runtime connected" : "Waiting for runtime…")
                 .font(.caption)
+            Text("· \(state.runtimeGeometry.count) view(s)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Spacer()
             if let error = mirror.lastError {
                 Text(error)
@@ -110,13 +113,19 @@ struct OverlayView: View {
             .onChanged { value in
                 if dragStartRuntimeID == nil {
                     let devicePoint = transform.devicePoint(value.startLocation)
+                    print("[LiveUI] canvas: drag started at canvas=\(value.startLocation) -> device=\(devicePoint), \(state.runtimeGeometry.count) known views")
                     if let hitID = hitTest(devicePoint: devicePoint) {
+                        print("[LiveUI] canvas: hit '\(hitID)'")
                         dragStartRuntimeID = hitID
                         if let node = state.node(forRuntimeID: hitID) {
+                            print("[LiveUI] canvas: resolved to node \(node.id)")
                             state.selection = node.id
                         } else {
+                            print("[LiveUI] canvas: could NOT resolve '\(hitID)' to an indexed node")
                             state.lastError = "Couldn't match runtime view '\(hitID)' back to a node in the indexed source — check that its .liveUITag(file:) matches the file SourceIndexer sees."
                         }
+                    } else {
+                        print("[LiveUI] canvas: no hit at \(devicePoint)")
                     }
                 }
                 dragTranslation = value.translation
@@ -126,12 +135,22 @@ struct OverlayView: View {
                     dragStartRuntimeID = nil
                     dragTranslation = .zero
                 }
-                guard let hitID = dragStartRuntimeID else { return }
-                guard let node = state.node(forRuntimeID: hitID) else { return }
+                guard let hitID = dragStartRuntimeID else {
+                    print("[LiveUI] canvas: drag ended with no active hit — nothing to do")
+                    return
+                }
+                guard let node = state.node(forRuntimeID: hitID) else {
+                    print("[LiveUI] canvas: drag ended but '\(hitID)' no longer resolves")
+                    return
+                }
 
                 let axis: DragIntent.Axis = abs(value.translation.width) > abs(value.translation.height) ? .horizontal : .vertical
                 let rawDelta = axis == .horizontal ? value.translation.width : value.translation.height
-                guard abs(rawDelta) >= 1, transform.scale > 0 else { return }
+                print("[LiveUI] canvas: drag ended on \(node.id), translation=\(value.translation), axis=\(axis), rawDelta=\(rawDelta)")
+                guard abs(rawDelta) >= 1, transform.scale > 0 else {
+                    print("[LiveUI] canvas: delta too small or bad scale — no mutation")
+                    return
+                }
 
                 let intent = DragIntent(
                     target: node.id,
@@ -140,7 +159,9 @@ struct OverlayView: View {
                     deltaPoints: rawDelta / transform.scale,
                     currentSpacingValue: nil
                 )
-                state.apply(LayoutEngine.mutation(for: intent, stackNodeID: nil))
+                let mutation = LayoutEngine.mutation(for: intent, stackNodeID: nil)
+                print("[LiveUI] canvas: applying \(mutation)")
+                state.apply(mutation)
             }
     }
 
