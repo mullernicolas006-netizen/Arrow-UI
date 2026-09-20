@@ -12,6 +12,10 @@ import Foundation
 /// for the plan to upgrade to real streaming (e.g. via `idb`) if this
 /// polling cadence turns out to feel too choppy in practice — that's a
 /// separate, swappable piece from everything else in this file.
+private struct CaptureFailure: Error {
+    let message: String
+}
+
 @MainActor
 public final class SimulatorScreenMirror: ObservableObject {
     @Published public private(set) var frame: NSImage?
@@ -48,7 +52,7 @@ public final class SimulatorScreenMirror: ObservableObject {
     /// hops back to publish the result — polling shouldn't stall the UI.
     private func captureOnce() async {
         let url = screenshotURL
-        let outcome = await Task.detached(priority: .utility) { () -> Result<NSImage, String> in
+        let outcome = await Task.detached(priority: .utility) { () -> Result<NSImage, CaptureFailure> in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
             process.arguments = ["simctl", "io", "booted", "screenshot", url.path]
@@ -59,14 +63,14 @@ public final class SimulatorScreenMirror: ObservableObject {
                 try process.run()
                 process.waitUntilExit()
                 guard process.terminationStatus == 0 else {
-                    return .failure("`xcrun simctl io booted screenshot` exited with status \(process.terminationStatus) — is a Simulator booted?")
+                    return .failure(CaptureFailure(message: "`xcrun simctl io booted screenshot` exited with status \(process.terminationStatus) — is a Simulator booted?"))
                 }
                 guard let image = NSImage(contentsOf: url) else {
-                    return .failure("Could not decode the Simulator screenshot.")
+                    return .failure(CaptureFailure(message: "Could not decode the Simulator screenshot."))
                 }
                 return .success(image)
             } catch {
-                return .failure("Could not run xcrun simctl: \(error)")
+                return .failure(CaptureFailure(message: "Could not run xcrun simctl: \(error)"))
             }
         }.value
 
@@ -74,8 +78,8 @@ public final class SimulatorScreenMirror: ObservableObject {
         case .success(let image):
             frame = image
             lastError = nil
-        case .failure(let message):
-            lastError = message
+        case .failure(let failure):
+            lastError = failure.message
         }
     }
 }
