@@ -90,8 +90,16 @@ public final class BridgeServer: ObservableObject {
                 self.buffers[key, default: Data()].append(data)
                 if var buffer = self.buffers[key] {
                     for line in Framing.extractLines(from: &buffer) {
-                        if let message = try? JSONDecoder().decode(RuntimeMessage.self, from: line) {
+                        do {
+                            let message = try JSONDecoder().decode(RuntimeMessage.self, from: line)
+                            if case .snapshot(let views) = message {
+                                print("[LiveUI] BridgeServer: received snapshot with \(views.count) view(s): \(views.map(\.id))")
+                            } else {
+                                print("[LiveUI] BridgeServer: received \(message)")
+                            }
                             DispatchQueue.main.async { self.onMessage?(message) }
+                        } catch {
+                            print("[LiveUI] BridgeServer: FAILED to decode message (\(error)) — raw: \(String(data: line, encoding: .utf8) ?? "<non-utf8, \(line.count) bytes>")")
                         }
                     }
                     self.buffers[key] = buffer

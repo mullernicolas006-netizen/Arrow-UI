@@ -49,8 +49,22 @@ public final class BridgeClient: ObservableObject {
     }
 
     public func send(_ message: RuntimeMessage) {
-        guard let connection, let data = try? JSONEncoder().encode(message) else { return }
-        connection.send(content: Framing.encode(data), completion: .contentProcessed { _ in })
+        guard let connection else {
+            print("[LiveUI] BridgeClient: send() called with no connection — dropping \(message)")
+            return
+        }
+        guard let data = try? JSONEncoder().encode(message) else {
+            print("[LiveUI] BridgeClient: failed to encode \(message)")
+            return
+        }
+        if case .snapshot(let views) = message {
+            print("[LiveUI] BridgeClient: sending snapshot with \(views.count) view(s): \(views.map(\.id))")
+        }
+        connection.send(content: Framing.encode(data), completion: .contentProcessed { error in
+            if let error {
+                print("[LiveUI] BridgeClient: send failed — \(error)")
+            }
+        })
     }
 
     private func attemptConnection() {
