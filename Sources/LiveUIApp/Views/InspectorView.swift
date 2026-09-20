@@ -60,19 +60,27 @@ struct InspectorView: View {
 private struct SpacingEditor: View {
     let node: IndexedNode
     @EnvironmentObject var state: AppState
-    @State private var spacing: Int = 0
+
+    /// Deliberately *not* `@State` — this always reads the live value out of
+    /// `node.callExpression`, which is refreshed from `state.fileIndexes` on
+    /// every apply/undo/redo. Caching this in local `@State` was the bug:
+    /// `node.id` (file + structural path + type name) doesn't change when a
+    /// mutation only changes `spacing`'s *value*, so SwiftUI kept the view's
+    /// identity across undo and the cached number never got refreshed — the
+    /// file on disk was correctly reverting, only the displayed stepper
+    /// value was stale.
+    private var spacing: Int { currentSpacing() ?? 0 }
 
     var body: some View {
         Section("Layout") {
-            Stepper(value: $spacing, in: 0...400, step: 4) {
+            Stepper(
+                value: Binding(get: { spacing }, set: { commit(newValue: $0) }),
+                in: 0...400,
+                step: 4
+            ) {
                 Text("Spacing: \(spacing)")
             }
-            .onChange(of: spacing) { _, newValue in
-                commit(newValue: newValue)
-            }
         }
-        .onAppear { spacing = currentSpacing() ?? spacing }
-        .id(node.id) // reset local @State when the selected node changes
     }
 
     private func currentSpacing() -> Int? {
