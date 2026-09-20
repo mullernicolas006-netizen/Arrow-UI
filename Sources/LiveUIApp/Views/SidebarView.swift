@@ -35,6 +35,7 @@ struct SidebarView: View {
                 HierarchyRows()
                 InspectorRows()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if state.fileIndexes.isEmpty {
                     ContentUnavailableView(
@@ -45,6 +46,7 @@ struct SidebarView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
             _ = url.startAccessingSecurityScopedResource()

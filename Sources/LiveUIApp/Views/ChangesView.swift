@@ -12,15 +12,19 @@ struct ChangesView: View {
                 .padding(8)
             Divider()
 
-            if state.lastDiff.isEmpty {
-                ContentUnavailableView(
-                    "No Changes Yet",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text("Edit a property in the Inspector to see the resulting source diff here.")
-                )
-            } else {
-                DiffView(diff: state.lastDiff)
+            Group {
+                if state.lastDiff.isEmpty {
+                    ContentUnavailableView(
+                        "No Changes Yet",
+                        systemImage: "doc.text.magnifyingglass",
+                        description: Text("Edit a property in the Inspector to see the resulting source diff here.")
+                    )
+                } else {
+                    DiffView(diff: state.lastDiff)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

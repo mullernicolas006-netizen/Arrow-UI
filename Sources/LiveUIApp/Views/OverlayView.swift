@@ -36,6 +36,7 @@ struct OverlayView: View {
             }
             .clipped()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func boxView(id: String, geometry: RuntimeGeometry) -> some View {

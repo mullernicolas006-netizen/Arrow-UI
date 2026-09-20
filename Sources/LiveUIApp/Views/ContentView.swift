@@ -10,10 +10,13 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView()
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } content: {
             OverlayView()
+                .navigationSplitViewColumnWidth(min: 360, ideal: 520)
         } detail: {
             ChangesView()
+                .navigationSplitViewColumnWidth(min: 320, ideal: 420)
         }
         .alert("LiveUI", isPresented: .constant(state.lastError != nil), presenting: state.lastError) { _ in
             Button("OK") { state.lastError = nil }
