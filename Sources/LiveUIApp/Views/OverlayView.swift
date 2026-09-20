@@ -182,16 +182,26 @@ struct OverlayView: View {
     }
 
     /// Reads back the value of an existing plain `.padding(N)` modifier on
-    /// `node`, if there is one — so repeated drags merge into it instead
-    /// of stacking a new `.padding()` call each time. Only recognizes the
-    /// exact single-unlabeled-argument shape our own `addModifier` always
-    /// produces; anything else (`.padding(.top, 12)`, `.padding()`) is
-    /// left alone and a new modifier is added instead.
+    /// `node`, but *only* when it's the outermost modifier in the chain —
+    /// i.e. exactly where our own `addModifier`/drag mutations always land.
+    ///
+    /// Deliberately does not use `findModifierCall`, which returns the
+    /// first "padding" match anywhere in the chain: a pre-existing,
+    /// differently-shaped `.padding()` earlier in the chain (e.g. hand-
+    /// written boilerplate) would match that lookup, fail the shape check
+    /// below, and cause every drag to fall back to *adding* a new
+    /// modifier forever — which is exactly what produced eleven stacked
+    /// `.padding(...)` calls in testing. Checking specifically the
+    /// outermost modifier means we only ever merge into a modifier we
+    /// know we (or an equivalent plain-padding edit) actually added.
     private func currentPlainPadding(of node: IndexedNode) -> Int? {
-        guard let modifierCall = SwiftSyntaxEngine.findModifierCall(named: "padding", startingFrom: node.callExpression) else {
+        let outermost = SwiftSyntaxEngine.outermostChainedExpr(startingFrom: node.callExpression)
+        guard let call = outermost.as(FunctionCallExprSyntax.self),
+              let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+              member.declName.baseName.text == "padding" else {
             return nil
         }
-        let args = Array(modifierCall.arguments)
+        let args = Array(call.arguments)
         guard args.count == 1, args[0].label == nil else { return nil }
         return Int(args[0].expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
     }
