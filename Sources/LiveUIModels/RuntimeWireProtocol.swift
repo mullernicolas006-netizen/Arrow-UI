@@ -44,7 +44,11 @@ public struct RuntimeViewInfo: Codable, Equatable, Identifiable, Sendable {
 
 /// Runtime (app) -> App (desktop) messages.
 public enum RuntimeMessage: Codable, Sendable {
-    case hello(appName: String, bundleIdentifier: String)
+    /// `screenWidth`/`screenHeight` are the device's logical screen size in
+    /// points (`UIScreen.main.bounds.size`) — needed so the desktop app can
+    /// scale the mirrored screenshot and the geometry overlay by the same
+    /// factor and have them land in the same place.
+    case hello(appName: String, bundleIdentifier: String, screenWidth: Double, screenHeight: Double)
     case snapshot(views: [RuntimeViewInfo])
     case ack
 }

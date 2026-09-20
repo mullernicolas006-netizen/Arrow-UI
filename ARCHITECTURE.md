@@ -53,20 +53,55 @@ require re-deriving the logic.
 | §7, §56 | Runtime <-> desktop transport | `SimulatorBridge/{Framing,BridgeClient,BridgeServer}.swift` |
 | §7-8 | View registration inside the running app | `LiveUIRuntime/LiveUITag.swift`, `LiveUIEditModeRoot.swift` |
 | §6.1, §20, §23 | Desktop app shell, hierarchy, inspector | `LiveUIApp/*` |
+| §21-26 | Direct manipulation: click-to-select + drag-to-mutate on the canvas | `LiveUIApp/Views/OverlayView.swift` |
+| §22-23 | Screen mirroring, coordinate mapping | `LiveUIApp/Mirroring/{SimulatorScreenMirror,CanvasTransform}.swift` |
 
 Everything above is real logic with a clear, single responsibility — not
 placeholders. The mutation engine specifically implements the exact
 scenario from §15/§69: dragging inside a `VStack` produces a `spacing`
 argument change, not an `.offset()`.
 
+## Screen mirroring: what's real, what's a known gap
+
+`SimulatorScreenMirror` polls `xcrun simctl io booted screenshot` (fully
+public, documented Apple tooling — no private APIs, no third-party
+dependency) and `OverlayView` composites it with the selection/drag
+overlay through `CanvasTransform`, which uses the device's real screen
+size (now sent over the wire in `RuntimeMessage.hello`) so the mirrored
+image and the geometry boxes are pixel-aligned regardless of window size.
+
+What this deliberately does *not* do yet:
+
+- **It's a still-image poll, not video.** A few frames per second at
+  most. If that feels too choppy in practice, the documented upgrade path
+  is [`idb`](https://github.com/facebook/idb) (Meta's iOS Development
+  Bridge) — it already solved real-time Simulator streaming using private
+  CoreSimulator frame-buffer APIs, and is a maintained, swappable
+  replacement for just the polling loop in `SimulatorScreenMirror`; it
+  was deliberately *not* used for this first pass so the core
+  click/drag-to-mutate loop has zero risky/private-API dependencies.
+- **No input is forwarded into the Simulator.** Selection and dragging
+  happen entirely on LiveUI's own canvas, hit-tested against
+  `RuntimeGeometry` LiveUI already collects — the running app never
+  receives synthetic taps. That's sufficient for the whole edit loop
+  (select → drag → mutate source), and deliberately avoids needing
+  touch-injection (which, unlike screenshotting, has no public API and
+  would require something like `idb`). Forwarding real taps through would
+  only matter for letting Edit Mode also interact with the live app
+  (typing into fields, exercising real button actions) — a distinct,
+  later feature.
+- **Canvas drags don't know their parent yet.** `LayoutEngine.mutation`
+  can produce the "grow the VStack's spacing" mutation, but only when
+  given a `parentType`/`stackNodeID` — and `OverlayView`'s drag gesture
+  currently passes `nil` for both, because `RuntimeViewInfo.parentID`
+  isn't populated by today's manual `.liveUITag(...)` call sites. So
+  every canvas drag takes the generic padding fallback. The Inspector's
+  spacing stepper already proves the smarter VStack-spacing path works
+  end to end; wiring `parentID` through is what's needed to get the same
+  smarts from a canvas drag.
+
 ## What is *not* implemented (deliberately out of MVP scope, §65-67)
 
-- **Actual pixel-level Simulator embedding / click-through.** `OverlayView`
-  draws wireframe boxes from reported `RuntimeGeometry`, not the
-  Simulator's real rendered pixels. True screen mirroring + input
-  forwarding into the real Simulator window is a separate integration
-  (likely `simctl`/ScreenCaptureKit-based) layered on top of the same
-  geometry data — it does not change anything in `LiveUICore`.
 - **Automatic view instrumentation.** App code currently has to call
   `.liveUITag(id:type:file:path:)` manually, matching the exact ID
   `SourceIndexer` would compute. A build-time (or macro-based) pass that

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Combine
 import SimulatorBridge
 import LiveUICore
@@ -14,6 +15,10 @@ public final class AppState: ObservableObject {
     @Published public var selection: ViewNodeID?
     @Published public var runtimeGeometry: [String: RuntimeGeometry] = [:]
     @Published public var isRuntimeConnected: Bool = false
+    /// The connected device's logical screen size in points, from the
+    /// runtime's `.hello` message — used to scale the mirrored screenshot
+    /// and the geometry overlay by the same factor (see `CanvasTransform`).
+    @Published public var deviceScreenSize: CGSize?
     @Published public var lastDiff: String = ""
     @Published public var lastError: String?
     @Published public private(set) var canUndo: Bool = false
@@ -39,8 +44,11 @@ public final class AppState: ObservableObject {
 
     private func handle(_ message: RuntimeMessage) {
         switch message {
-        case .hello:
+        case .hello(_, _, let screenWidth, let screenHeight):
             isRuntimeConnected = true
+            if screenWidth > 0, screenHeight > 0 {
+                deviceScreenSize = CGSize(width: screenWidth, height: screenHeight)
+            }
         case .snapshot(let views):
             for view in views {
                 runtimeGeometry[view.id] = view.geometry
@@ -118,5 +126,26 @@ public final class AppState: ObservableObject {
 
     private func currentSource(for file: String) -> String? {
         history.currentSource[file] ?? (try? String(contentsOfFile: file, encoding: .utf8))
+    }
+
+    // MARK: - Canvas hit-testing (§21-26: direct manipulation)
+
+    /// Resolves a runtime-reported id (a `ViewNodeID.description` string,
+    /// as sent in `RuntimeViewInfo`) back to the `IndexedNode` it came
+    /// from, so the canvas can turn "the box the user just clicked" into
+    /// something `LayoutEngine`/`MutationEngine` can act on.
+    public func node(forRuntimeID runtimeID: String) -> IndexedNode? {
+        for index in fileIndexes.values {
+            if let found = search(runtimeID, in: index.roots) { return found }
+        }
+        return nil
+    }
+
+    private func search(_ runtimeID: String, in nodes: [IndexedNode]) -> IndexedNode? {
+        for node in nodes {
+            if node.id.description == runtimeID { return node }
+            if let found = search(runtimeID, in: node.children) { return found }
+        }
+        return nil
     }
 }

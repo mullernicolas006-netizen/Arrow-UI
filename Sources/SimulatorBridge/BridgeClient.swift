@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import CoreGraphics
 import LiveUIModels
 
 /// The runtime side of the connection: lives inside the app under
@@ -19,7 +20,7 @@ public final class BridgeClient: ObservableObject {
         self.port = NWEndpoint.Port(rawValue: port) ?? 51820
     }
 
-    public func connect(appName: String, bundleIdentifier: String) {
+    public func connect(appName: String, bundleIdentifier: String, screenSize: CGSize) {
         let connection = NWConnection(host: host, port: port, using: .tcp)
         self.connection = connection
 
@@ -27,7 +28,12 @@ public final class BridgeClient: ObservableObject {
             guard let self else { return }
             DispatchQueue.main.async { self.isConnected = (state == .ready) }
             if state == .ready {
-                self.send(.hello(appName: appName, bundleIdentifier: bundleIdentifier))
+                self.send(.hello(
+                    appName: appName,
+                    bundleIdentifier: bundleIdentifier,
+                    screenWidth: screenSize.width,
+                    screenHeight: screenSize.height
+                ))
             }
         }
         connection.start(queue: .main)
