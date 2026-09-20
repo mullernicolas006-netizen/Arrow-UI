@@ -51,6 +51,20 @@ final class LayoutEngineTests: XCTestCase {
         XCTAssertEqual(args.first?.value, .integer(12))
     }
 
+    func testRepeatedFreeformDragMergesIntoExistingPaddingInsteadOfStacking() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let intent = DragIntent(target: target, parentType: "ZStack", axis: .vertical, deltaPoints: 12, currentSpacingValue: nil, currentPaddingValue: 75)
+        let mutation = LayoutEngine.mutation(for: intent, stackNodeID: nil)
+
+        guard case .modifyModifierArgument(_, let name, let label, _, let old, let new) = mutation else {
+            return XCTFail("expected an update to the existing padding modifier, not a new one stacked on top")
+        }
+        XCTAssertEqual(name, "padding")
+        XCTAssertNil(label)
+        XCTAssertEqual(old, .integer(75))
+        XCTAssertEqual(new, .integer(87))
+    }
+
     func testSpacingNeverGoesNegative() {
         let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Text")
         let stackID = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0]), typeName: "VStack")

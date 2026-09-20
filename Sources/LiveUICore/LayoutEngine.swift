@@ -13,13 +13,19 @@ public struct DragIntent {
     public var axis: Axis
     public var deltaPoints: Double
     public var currentSpacingValue: Int?
+    /// The value of an existing plain `.padding(N)` modifier on the
+    /// dragged view, if one already exists — lets the padding fallback
+    /// merge into it (old + delta) instead of stacking a new `.padding()`
+    /// call on every drag.
+    public var currentPaddingValue: Int?
 
-    public init(target: ViewNodeID, parentType: String?, axis: Axis, deltaPoints: Double, currentSpacingValue: Int?) {
+    public init(target: ViewNodeID, parentType: String?, axis: Axis, deltaPoints: Double, currentSpacingValue: Int?, currentPaddingValue: Int? = nil) {
         self.target = target
         self.parentType = parentType
         self.axis = axis
         self.deltaPoints = deltaPoints
         self.currentSpacingValue = currentSpacingValue
+        self.currentPaddingValue = currentPaddingValue
     }
 }
 
@@ -47,6 +53,17 @@ public enum LayoutEngine {
             return spacingMutation(stackID: stackID, callName: "HStack", current: intent.currentSpacingValue, delta: intent.deltaPoints)
 
         default:
+            if let current = intent.currentPaddingValue {
+                let new = current + Int(intent.deltaPoints.rounded())
+                return .modifyModifierArgument(
+                    target: intent.target,
+                    modifierName: "padding",
+                    argumentLabel: nil,
+                    argumentIndex: 0,
+                    oldValue: .integer(current),
+                    newValue: .integer(new)
+                )
+            }
             return .addModifier(
                 target: intent.target,
                 modifierName: "padding",

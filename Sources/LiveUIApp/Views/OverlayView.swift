@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftSyntax
 import LiveUICore
 import LiveUIModels
 
@@ -80,15 +81,21 @@ struct OverlayView: View {
         let origin = transform.point(CGPoint(x: geometry.x, y: geometry.y))
         let size = transform.size(CGSize(width: geometry.width, height: geometry.height))
 
+        // White stroke + .difference blend mode (the same trick Xcode/
+        // design tools use for selection outlines): renders black against
+        // light backgrounds and white against dark ones automatically, so
+        // it's never invisible regardless of what's under it.
         return Rectangle()
-            .strokeBorder(isSelected ? Color.accentColor : Color.secondary, lineWidth: isSelected ? 2 : 1)
+            .strokeBorder(Color.white, lineWidth: isSelected || isDragging ? 2.5 : 1)
             .frame(width: max(size.width, 1), height: max(size.height, 1))
             .position(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
             .offset(isDragging ? dragTranslation : .zero)
+            .blendMode(.difference)
             .overlay(alignment: .topLeading) {
                 Text(id)
                     .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white)
+                    .blendMode(.difference)
             }
             // Hit-testing is done manually below, against `runtimeGeometry`
             // directly, so one gesture on the whole canvas handles both
@@ -157,7 +164,8 @@ struct OverlayView: View {
                     parentType: nil,
                     axis: axis,
                     deltaPoints: rawDelta / transform.scale,
-                    currentSpacingValue: nil
+                    currentSpacingValue: nil,
+                    currentPaddingValue: currentPlainPadding(of: node)
                 )
                 let mutation = LayoutEngine.mutation(for: intent, stackNodeID: nil)
                 print("[LiveUI] canvas: applying \(mutation)")
@@ -171,5 +179,20 @@ struct OverlayView: View {
             if rect.contains(devicePoint) { return id }
         }
         return nil
+    }
+
+    /// Reads back the value of an existing plain `.padding(N)` modifier on
+    /// `node`, if there is one — so repeated drags merge into it instead
+    /// of stacking a new `.padding()` call each time. Only recognizes the
+    /// exact single-unlabeled-argument shape our own `addModifier` always
+    /// produces; anything else (`.padding(.top, 12)`, `.padding()`) is
+    /// left alone and a new modifier is added instead.
+    private func currentPlainPadding(of node: IndexedNode) -> Int? {
+        guard let modifierCall = SwiftSyntaxEngine.findModifierCall(named: "padding", startingFrom: node.callExpression) else {
+            return nil
+        }
+        let args = Array(modifierCall.arguments)
+        guard args.count == 1, args[0].label == nil else { return nil }
+        return Int(args[0].expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
