@@ -17,6 +17,13 @@ public final class BridgeClient: ObservableObject {
     private var appName = ""
     private var bundleIdentifier = ""
     private var screenSize: CGSize = .zero
+    /// The most recent snapshot, cached regardless of whether it could
+    /// actually be sent. SwiftUI's `.onPreferenceChange` (which reports
+    /// this) only fires when the geometry *changes* — for a static layout
+    /// that's typically once, on the very first layout pass, which can
+    /// easily happen before `connect()`'s handshake finishes. Without this
+    /// cache, that one snapshot is dropped and nothing is ever sent again.
+    private var lastSnapshot: [RuntimeViewInfo]?
 
     @Published public private(set) var isConnected = false
     public var onMessage: ((BridgeMessage) -> Void)?
@@ -49,8 +56,11 @@ public final class BridgeClient: ObservableObject {
     }
 
     public func send(_ message: RuntimeMessage) {
+        if case .snapshot(let views) = message {
+            lastSnapshot = views
+        }
         guard let connection else {
-            print("[LiveUI] BridgeClient: send() called with no connection — dropping \(message)")
+            print("[LiveUI] BridgeClient: send() called with no connection — cached for replay on connect: \(message)")
             return
         }
         guard let data = try? JSONEncoder().encode(message) else {
@@ -85,6 +95,10 @@ public final class BridgeClient: ObservableObject {
                     screenWidth: self.screenSize.width,
                     screenHeight: self.screenSize.height
                 ))
+                if let lastSnapshot = self.lastSnapshot {
+                    print("[LiveUI] BridgeClient: replaying cached snapshot with \(lastSnapshot.count) view(s)")
+                    self.send(.snapshot(views: lastSnapshot))
+                }
             case .waiting(let error):
                 print("[LiveUI] BridgeClient: waiting — \(error)")
             case .failed(let error):
