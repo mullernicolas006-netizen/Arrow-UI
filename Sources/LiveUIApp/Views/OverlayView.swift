@@ -1,14 +1,14 @@
 import SwiftUI
 import LiveUIModels
 
-/// The middle panel: a geometry-driven wireframe of whatever the connected
-/// runtime last reported (§8, §22-23), plus the diff from the most recent
-/// mutation (§28).
+/// The middle panel — the canvas (§8, §22-23).
 ///
 /// Note (see ARCHITECTURE.md "Known gaps"): this draws boxes from reported
 /// `RuntimeGeometry`, it does not mirror the Simulator's actual pixels.
-/// True click-through-to-real-pixels embedding is a separate integration
-/// (screen capture + input forwarding) layered on top of this same data.
+/// Screen-mirroring the Simulator's real render into this same panel
+/// (with this overlay layered on top for selection/drag) is the planned
+/// next step, so the canvas becomes a genuine single-window, Figma-style
+/// editing surface instead of a wireframe.
 struct OverlayView: View {
     @EnvironmentObject var state: AppState
 
@@ -35,12 +35,6 @@ struct OverlayView: View {
                 }
             }
             .clipped()
-
-            if !state.lastDiff.isEmpty {
-                Divider()
-                DiffView(diff: state.lastDiff)
-                    .frame(maxHeight: 180)
-            }
         }
     }
 

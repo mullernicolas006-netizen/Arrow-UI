@@ -1,37 +1,19 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
+/// Three-panel layout: hierarchy + inspector on the left, the visual
+/// canvas in the middle (today: a geometry wireframe; the planned next
+/// step is mirroring the Simulator's real pixels into this same spot),
+/// and the code diff on the right (§20, §23, §28).
 struct ContentView: View {
     @EnvironmentObject var state: AppState
-    @State private var showingImporter = false
 
     var body: some View {
         NavigationSplitView {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Button("Open Project…") { showingImporter = true }
-                    Spacer()
-                    Button {
-                        state.reindex()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .help("Re-index (pick up external code changes, §24 Code → Editor)")
-                }
-                .padding(8)
-
-                Divider()
-                HierarchyView()
-            }
+            SidebarView()
         } content: {
             OverlayView()
         } detail: {
-            InspectorView()
-        }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.folder]) { result in
-            guard case .success(let url) = result else { return }
-            _ = url.startAccessingSecurityScopedResource()
-            state.openProject(at: url)
+            ChangesView()
         }
         .alert("LiveUI", isPresented: .constant(state.lastError != nil), presenting: state.lastError) { _ in
             Button("OK") { state.lastError = nil }
