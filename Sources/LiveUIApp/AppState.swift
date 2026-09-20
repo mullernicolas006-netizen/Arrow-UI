@@ -26,12 +26,22 @@ public final class AppState: ObservableObject {
 
     public let history = HistoryEngine()
     private let bridge = BridgeServer()
+    private var cancellables = Set<AnyCancellable>()
 
     public init() {
         bridge.onMessage = { [weak self] message in
             guard let self else { return }
             Task { @MainActor in self.handle(message) }
         }
+        // Surfaces a listener failure discovered *after* startBridge()
+        // already returned successfully (e.g. "port already in use" from
+        // another still-running LiveUIApp instance) — see BridgeServer
+        // .lastError's doc comment for why this can't just be a thrown error.
+        bridge.$lastError
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in self?.lastError = message }
+            .store(in: &cancellables)
     }
 
     public func startBridge() {

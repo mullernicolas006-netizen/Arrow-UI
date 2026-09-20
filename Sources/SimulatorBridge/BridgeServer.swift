@@ -10,6 +10,13 @@ public final class BridgeServer: ObservableObject {
     private var buffers: [ObjectIdentifier: Data] = [:]
 
     @Published public private(set) var connectedAppCount: Int = 0
+    /// A listener failure discovered *after* `start()` returns — e.g. "port
+    /// already in use" only shows up asynchronously via Network.framework's
+    /// state callback, not as a thrown error from `start()` itself, so
+    /// `start()` can return successfully while the listener still ends up
+    /// never actually accepting anything. Surfacing this is what makes
+    /// that failure visible instead of a silently-stuck-red status dot.
+    @Published public private(set) var lastError: String?
     public var onMessage: ((RuntimeMessage) -> Void)?
 
     public init() {}
@@ -20,8 +27,12 @@ public final class BridgeServer: ObservableObject {
             print("[LiveUI] BridgeServer: incoming connection from \(connection.endpoint)")
             self?.accept(connection)
         }
-        listener.stateUpdateHandler = { state in
+        listener.stateUpdateHandler = { [weak self] state in
             print("[LiveUI] BridgeServer: listener state -> \(state)")
+            if case .failed(let error) = state {
+                let message = "Could not listen on port \(port): \(error). Another LiveUIApp instance is probably still running — try `killall LiveUIApp` in Terminal, then relaunch."
+                DispatchQueue.main.async { self?.lastError = message }
+            }
         }
         listener.start(queue: .main)
         self.listener = listener
