@@ -3,40 +3,44 @@ import SwiftSyntax
 import LiveUICore
 import LiveUIModels
 
-/// The Property Inspector (§20): shows the selected node's location, and —
-/// for the MVP — an editable `spacing` field for `VStack`/`HStack`, wired
-/// straight into `MutationEngine` through `AppState.apply`. This is the
-/// smallest possible end-to-end slice of §69's "holy grail": move a
-/// number here, watch the real Swift source change.
-struct InspectorView: View {
+/// The Property Inspector (§20), as sections appended to `SidebarView`'s
+/// shared List — for the MVP, an editable `spacing` field for
+/// `VStack`/`HStack`, wired straight into `MutationEngine` through
+/// `AppState.apply`. This is the smallest possible end-to-end slice of
+/// §69's "holy grail": move a number here, watch the real Swift source
+/// change.
+///
+/// Content only — deliberately *not* wrapped in its own `Form`. Stacking a
+/// `Form` under `HierarchyView`'s `List` inside a `VStack` produced broken
+/// layout (the inspector detaching from the sidebar column). One shared
+/// `List` with multiple `Section`s is the fix — see `SidebarView`.
+struct InspectorRows: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        Group {
-            if let selection = state.selection, let node = findNode(selection) {
-                Form {
-                    Section("Selected") {
-                        LabeledContent("Type", value: node.id.typeName)
-                        LabeledContent("File", value: (node.id.file as NSString).lastPathComponent)
-                        LabeledContent("Path", value: node.id.path.description)
-                    }
+        if let selection = state.selection, let node = findNode(selection) {
+            Section("Selected") {
+                LabeledContent("Type", value: node.id.typeName)
+                LabeledContent("File", value: (node.id.file as NSString).lastPathComponent)
+                LabeledContent("Path", value: node.id.path.description)
+            }
 
-                    if node.id.typeName == "VStack" || node.id.typeName == "HStack" {
-                        SpacingEditor(node: node)
-                    }
+            if node.id.typeName == "VStack" || node.id.typeName == "HStack" {
+                SpacingEditor(node: node)
+            }
 
-                    if let geometry = state.runtimeGeometry[node.id.description] {
-                        Section("Live Geometry") {
-                            LabeledContent("x", value: geometry.x, format: .number)
-                            LabeledContent("y", value: geometry.y, format: .number)
-                            LabeledContent("width", value: geometry.width, format: .number)
-                            LabeledContent("height", value: geometry.height, format: .number)
-                        }
-                    }
+            if let geometry = state.runtimeGeometry[node.id.description] {
+                Section("Live Geometry") {
+                    LabeledContent("x", value: geometry.x, format: .number)
+                    LabeledContent("y", value: geometry.y, format: .number)
+                    LabeledContent("width", value: geometry.width, format: .number)
+                    LabeledContent("height", value: geometry.height, format: .number)
                 }
-                .formStyle(.grouped)
-            } else {
-                ContentUnavailableView("No Selection", systemImage: "cursorarrow.click")
+            }
+        } else {
+            Section("Inspector") {
+                Text("No Selection")
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -63,11 +67,11 @@ private struct SpacingEditor: View {
 
     /// Deliberately *not* `@State` — this always reads the live value out of
     /// `node.callExpression`, which is refreshed from `state.fileIndexes` on
-    /// every apply/undo/redo. Caching this in local `@State` was the bug:
-    /// `node.id` (file + structural path + type name) doesn't change when a
-    /// mutation only changes `spacing`'s *value*, so SwiftUI kept the view's
-    /// identity across undo and the cached number never got refreshed — the
-    /// file on disk was correctly reverting, only the displayed stepper
+    /// every apply/undo/redo. Caching this in local `@State` was an earlier
+    /// bug: `node.id` (file + structural path + type name) doesn't change
+    /// when a mutation only changes `spacing`'s *value*, so SwiftUI kept the
+    /// view's identity across undo and the cached number never refreshed —
+    /// the file on disk was correctly reverting, only the displayed stepper
     /// value was stale.
     private var spacing: Int { currentSpacing() ?? 0 }
 

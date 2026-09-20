@@ -2,28 +2,21 @@ import SwiftUI
 import LiveUICore
 import LiveUIModels
 
-/// The View Hierarchy panel (§23): one disclosure tree per indexed file,
-/// selection here drives both the Inspector and the overlay highlight.
-struct HierarchyView: View {
+/// The View Hierarchy section (§23): one disclosure tree per indexed file.
+///
+/// Content only — deliberately *not* wrapped in its own `List`. It's
+/// embedded as sections inside `SidebarView`'s single shared List
+/// alongside `InspectorRows` (see that file's doc comment for why they
+/// share one List instead of being stacked as separate containers).
+struct HierarchyRows: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        List(selection: $state.selection) {
-            ForEach(Array(state.fileIndexes.keys.sorted()), id: \.self) { file in
-                Section((file as NSString).lastPathComponent) {
-                    ForEach(state.fileIndexes[file]?.roots ?? [], id: \.id) { node in
-                        NodeRow(node: node)
-                    }
+        ForEach(Array(state.fileIndexes.keys.sorted()), id: \.self) { file in
+            Section((file as NSString).lastPathComponent) {
+                ForEach(state.fileIndexes[file]?.roots ?? [], id: \.id) { node in
+                    NodeRow(node: node)
                 }
-            }
-        }
-        .overlay {
-            if state.fileIndexes.isEmpty {
-                ContentUnavailableView(
-                    "No Project Open",
-                    systemImage: "folder",
-                    description: Text("Open a SwiftUI project to see its view hierarchy.")
-                )
             }
         }
     }
