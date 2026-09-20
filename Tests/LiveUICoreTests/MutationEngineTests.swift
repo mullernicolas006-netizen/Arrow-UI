@@ -101,6 +101,53 @@ final class MutationEngineTests: XCTestCase {
         XCTAssertTrue(newSource.contains("Text(\"Title\")"), "the original call must be preserved verbatim")
     }
 
+    /// Swift has no single "negative literal" token — `-103` parses as a
+    /// prefix `-` operator applied to the positive literal `103`, not one
+    /// literal reading "-103". A value written naively as a single token
+    /// prints correctly the *first* time, but breaks on the *next* parse,
+    /// which is exactly what happened in real testing: dragging a view to
+    /// a negative padding worked once, then the following drag on that
+    /// same (now negative) value threw "unsupported literal". This test
+    /// drives the exact same two-step round trip through MutationEngine.
+    func testNegativeValueRoundTripsAcrossTwoMutations() throws {
+        let source = """
+        struct ContentView: View {
+            var body: some View {
+                Text("Title")
+            }
+        }
+        """
+        let index = SourceIndexer.index(source: source, filePath: "ContentView.swift")
+        let text = try XCTUnwrap(firstNode(named: "Text", in: index.roots))
+
+        let firstMutation = Mutation.addModifier(
+            target: text.id,
+            modifierName: "padding",
+            arguments: [MutationArgument(label: nil, value: .integer(-103))]
+        )
+        let (afterFirst, _) = try MutationEngine.apply(firstMutation, toSource: source, filePath: "ContentView.swift")
+        XCTAssertTrue(afterFirst.contains(".padding(-103)"))
+
+        // Re-index the ACTUAL resulting source, exactly as a second drag
+        // would: this is what turns "-103" from whatever in-memory shape
+        // produced it into the real PrefixOperatorExprSyntax the parser
+        // yields for negative numbers.
+        let reindexed = SourceIndexer.index(source: afterFirst, filePath: "ContentView.swift")
+        let reindexedText = try XCTUnwrap(firstNode(named: "Text", in: reindexed.roots))
+
+        let secondMutation = Mutation.modifyModifierArgument(
+            target: reindexedText.id,
+            modifierName: "padding",
+            argumentLabel: nil,
+            argumentIndex: 0,
+            oldValue: .integer(-103),
+            newValue: .integer(-217)
+        )
+        let (afterSecond, _) = try MutationEngine.apply(secondMutation, toSource: afterFirst, filePath: "ContentView.swift")
+        XCTAssertTrue(afterSecond.contains(".padding(-217)"))
+        XCTAssertFalse(afterSecond.contains(".padding(-103)"))
+    }
+
     func testMutationOnStaleTargetThrowsRatherThanCorrupting() {
         let source = """
         struct ContentView: View {

@@ -138,32 +138,41 @@ public enum SwiftSyntaxEngine {
         return call.with(\.arguments, LabeledExprListSyntax(newArgs))
     }
 
+    /// Swift has no single "negative literal" token: `-5` parses as a
+    /// prefix `-` operator (`PrefixOperatorExprSyntax`) applied to the
+    /// *positive* literal `5`, not one `IntegerLiteralExprSyntax` reading
+    /// "-5". Writing "-5" as a single literal token prints correctly the
+    /// first time (raw text is still valid Swift), but the *next* time
+    /// this file is parsed, that text becomes a real
+    /// `PrefixOperatorExprSyntax` — which none of this code recognized,
+    /// so every mutation after the first one on a negative value threw
+    /// `.unsupportedLiteral`. Every read/write of a numeric literal here
+    /// goes through this shape deliberately, in both directions.
     private static func replacingLiteral(_ expr: ExprSyntax, with value: MutationValue) throws -> ExprSyntax {
+        let leadingTrivia = expr.leadingTrivia
+        let trailingTrivia = expr.trailingTrivia
+
         switch value {
         case .integer(let v):
-            if let lit = expr.as(IntegerLiteralExprSyntax.self) {
-                return ExprSyntax(lit.with(\.literal, retriviated(.integerLiteral(String(v)), from: lit.literal)))
+            guard isNumericLiteral(expr) else { throw SwiftSyntaxEngineError.unsupportedLiteral }
+            if isFloatLiteral(expr) {
+                return floatLiteralExpr(for: Double(v), leadingTrivia: leadingTrivia, trailingTrivia: trailingTrivia)
             }
-            if let lit = expr.as(FloatLiteralExprSyntax.self) {
-                return ExprSyntax(lit.with(\.literal, retriviated(.floatLiteral(formatted(Double(v))), from: lit.literal)))
-            }
-            throw SwiftSyntaxEngineError.unsupportedLiteral
+            return integerLiteralExpr(for: v, leadingTrivia: leadingTrivia, trailingTrivia: trailingTrivia)
 
         case .double(let v):
-            if let lit = expr.as(FloatLiteralExprSyntax.self) {
-                return ExprSyntax(lit.with(\.literal, retriviated(.floatLiteral(formatted(v)), from: lit.literal)))
-            }
-            if let lit = expr.as(IntegerLiteralExprSyntax.self), v == v.rounded() {
-                return ExprSyntax(lit.with(\.literal, retriviated(.integerLiteral(String(Int(v))), from: lit.literal)))
-            }
-            throw SwiftSyntaxEngineError.unsupportedLiteral
+            guard isNumericLiteral(expr) else { throw SwiftSyntaxEngineError.unsupportedLiteral }
+            return floatLiteralExpr(for: v, leadingTrivia: leadingTrivia, trailingTrivia: trailingTrivia)
 
         case .boolean(let v):
             guard let lit = expr.as(BooleanLiteralExprSyntax.self) else {
                 throw SwiftSyntaxEngineError.unsupportedLiteral
             }
             let kind: TokenKind = v ? .keyword(.true) : .keyword(.false)
-            return ExprSyntax(lit.with(\.literal, retriviated(kind, from: lit.literal)))
+            let token = TokenSyntax(kind, presence: .present)
+                .with(\.leadingTrivia, leadingTrivia)
+                .with(\.trailingTrivia, trailingTrivia)
+            return ExprSyntax(lit.with(\.literal, token))
 
         case .string:
             // Deliberately unsupported for now: the exact SwiftSyntax type
@@ -175,12 +184,55 @@ public enum SwiftSyntaxEngine {
         }
     }
 
-    /// Builds a new token with `kind`, carrying over the leading/trailing
-    /// trivia of `original` so surrounding whitespace/comments survive.
-    private static func retriviated(_ kind: TokenKind, from original: TokenSyntax) -> TokenSyntax {
-        TokenSyntax(kind, presence: .present)
-            .with(\.leadingTrivia, original.leadingTrivia)
-            .with(\.trailingTrivia, original.trailingTrivia)
+    /// True for anything `replacingLiteral`'s `.integer`/`.double` cases
+    /// can operate on: a plain integer/float literal, or Swift's
+    /// negative-number shape (a prefix `-` applied to one).
+    private static func isNumericLiteral(_ expr: ExprSyntax) -> Bool {
+        if expr.is(IntegerLiteralExprSyntax.self) || expr.is(FloatLiteralExprSyntax.self) { return true }
+        if let prefix = expr.as(PrefixOperatorExprSyntax.self), prefix.operator.text == "-" {
+            return prefix.expression.is(IntegerLiteralExprSyntax.self) || prefix.expression.is(FloatLiteralExprSyntax.self)
+        }
+        return false
+    }
+
+    private static func isFloatLiteral(_ expr: ExprSyntax) -> Bool {
+        if expr.is(FloatLiteralExprSyntax.self) { return true }
+        if let prefix = expr.as(PrefixOperatorExprSyntax.self) {
+            return prefix.expression.is(FloatLiteralExprSyntax.self)
+        }
+        return false
+    }
+
+    private static func integerLiteralExpr(for value: Int, leadingTrivia: Trivia, trailingTrivia: Trivia) -> ExprSyntax {
+        guard value < 0 else {
+            let token = TokenSyntax.integerLiteral(String(value))
+                .with(\.leadingTrivia, leadingTrivia)
+                .with(\.trailingTrivia, trailingTrivia)
+            return ExprSyntax(IntegerLiteralExprSyntax(literal: token))
+        }
+        let minusToken = TokenSyntax.prefixOperator("-").with(\.leadingTrivia, leadingTrivia)
+        let magnitudeToken = TokenSyntax.integerLiteral(String(-value)).with(\.trailingTrivia, trailingTrivia)
+        let prefix = PrefixOperatorExprSyntax(
+            operator: minusToken,
+            expression: ExprSyntax(IntegerLiteralExprSyntax(literal: magnitudeToken))
+        )
+        return ExprSyntax(prefix)
+    }
+
+    private static func floatLiteralExpr(for value: Double, leadingTrivia: Trivia, trailingTrivia: Trivia) -> ExprSyntax {
+        guard value < 0 else {
+            let token = TokenSyntax.floatLiteral(formatted(value))
+                .with(\.leadingTrivia, leadingTrivia)
+                .with(\.trailingTrivia, trailingTrivia)
+            return ExprSyntax(FloatLiteralExprSyntax(literal: token))
+        }
+        let minusToken = TokenSyntax.prefixOperator("-").with(\.leadingTrivia, leadingTrivia)
+        let magnitudeToken = TokenSyntax.floatLiteral(formatted(-value)).with(\.trailingTrivia, trailingTrivia)
+        let prefix = PrefixOperatorExprSyntax(
+            operator: minusToken,
+            expression: ExprSyntax(FloatLiteralExprSyntax(literal: magnitudeToken))
+        )
+        return ExprSyntax(prefix)
     }
 
     private static func formatted(_ v: Double) -> String {
@@ -238,9 +290,9 @@ public enum SwiftSyntaxEngine {
     private static func literalExpr(for value: MutationValue) throws -> ExprSyntax {
         switch value {
         case .integer(let v):
-            return ExprSyntax(IntegerLiteralExprSyntax(literal: .integerLiteral(String(v))))
+            return integerLiteralExpr(for: v, leadingTrivia: [], trailingTrivia: [])
         case .double(let v):
-            return ExprSyntax(FloatLiteralExprSyntax(literal: .floatLiteral(formatted(v))))
+            return floatLiteralExpr(for: v, leadingTrivia: [], trailingTrivia: [])
         case .boolean(let v):
             return ExprSyntax(BooleanLiteralExprSyntax(literal: v ? .keyword(.true) : .keyword(.false)))
         case .string:
