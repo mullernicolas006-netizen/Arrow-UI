@@ -173,12 +173,24 @@ struct OverlayView: View {
             }
     }
 
+    /// A parent container's box always encloses its children's boxes —
+    /// dragging the Button inside a VStack means the click point is
+    /// simultaneously "inside" both the Button's and the VStack's
+    /// geometry. Picking the *smallest* enclosing box (not just any
+    /// match) is what makes this behave like every other design tool:
+    /// click/drag always targets the most specific thing under the
+    /// cursor, not an arbitrary ancestor.
     private func hitTest(devicePoint: CGPoint) -> String? {
+        var best: (id: String, area: Double)?
         for (id, geometry) in state.runtimeGeometry {
             let rect = CGRect(x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height)
-            if rect.contains(devicePoint) { return id }
+            guard rect.contains(devicePoint) else { continue }
+            let area = geometry.width * geometry.height
+            if best == nil || area < best!.area {
+                best = (id, area)
+            }
         }
-        return nil
+        return best?.id
     }
 
     /// Reads back the value of an existing plain `.padding(N)` modifier on
