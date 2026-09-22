@@ -165,7 +165,7 @@ struct OverlayView: View {
                     axis: axis,
                     deltaPoints: rawDelta / transform.scale,
                     currentSpacingValue: nil,
-                    currentPaddingValue: currentPlainPadding(of: node)
+                    currentPaddingValue: currentEdgePadding(of: node, edge: LayoutEngine.edgeName(for: axis))
                 )
                 let mutation = LayoutEngine.mutation(for: intent, stackNodeID: nil)
                 print("[LiveUI] canvas: applying \(mutation)")
@@ -193,9 +193,15 @@ struct OverlayView: View {
         return best?.id
     }
 
-    /// Reads back the value of an existing plain `.padding(N)` modifier on
-    /// `node`, but *only* when it's the outermost modifier in the chain —
-    /// i.e. exactly where our own `addModifier`/drag mutations always land.
+    /// Reads back the value of an existing `.padding(<edge>, N)` modifier
+    /// on `node` *for the given edge*, but only when it's the outermost
+    /// modifier in the chain — i.e. exactly where our own `addModifier`/
+    /// drag mutations always land.
+    ///
+    /// The edge check matters as much as the outermost check: a vertical
+    /// drag must only ever merge into an existing `.top` padding, never a
+    /// `.leading` one left over from an earlier horizontal drag (that
+    /// would silently apply a vertical delta to a horizontal value).
     ///
     /// Deliberately does not use `findModifierCall`, which returns the
     /// first "padding" match anywhere in the chain: a pre-existing,
@@ -205,8 +211,8 @@ struct OverlayView: View {
     /// modifier forever — which is exactly what produced eleven stacked
     /// `.padding(...)` calls in testing. Checking specifically the
     /// outermost modifier means we only ever merge into a modifier we
-    /// know we (or an equivalent plain-padding edit) actually added.
-    private func currentPlainPadding(of node: IndexedNode) -> Int? {
+    /// know we (or an equivalent edit) actually added.
+    private func currentEdgePadding(of node: IndexedNode, edge: String) -> Int? {
         let outermost = SwiftSyntaxEngine.outermostChainedExpr(startingFrom: node.callExpression)
         guard let call = outermost.as(FunctionCallExprSyntax.self),
               let member = call.calledExpression.as(MemberAccessExprSyntax.self),
@@ -214,7 +220,11 @@ struct OverlayView: View {
             return nil
         }
         let args = Array(call.arguments)
-        guard args.count == 1, args[0].label == nil else { return nil }
-        return Int(args[0].expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard args.count == 2, args[0].label == nil, args[1].label == nil,
+              let edgeMember = args[0].expression.as(MemberAccessExprSyntax.self),
+              edgeMember.declName.baseName.text == edge else {
+            return nil
+        }
+        return Int(args[1].expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

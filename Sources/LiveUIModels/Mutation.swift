@@ -76,6 +76,10 @@ public enum MutationValue: Codable, Equatable, Sendable {
     case double(Double)
     case string(String)
     case boolean(Bool)
+    /// An implicit-member (dot-shorthand) expression, e.g. `.top`, `.leading`
+    /// — for arguments like the edge in `.padding(.top, 12)`. Stores just
+    /// the member name ("top"), not the leading dot.
+    case memberShorthand(String)
 }
 
 public struct MutationArgument: Codable, Equatable, Sendable {

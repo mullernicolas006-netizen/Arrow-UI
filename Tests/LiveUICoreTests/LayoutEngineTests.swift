@@ -48,7 +48,21 @@ final class LayoutEngineTests: XCTestCase {
             return XCTFail("expected a padding fallback for a free-form ZStack")
         }
         XCTAssertEqual(name, "padding")
-        XCTAssertEqual(args.first?.value, .integer(12))
+        XCTAssertEqual(args.count, 2, "padding must be edge-specific (.padding(.top, 12)), not all-edges (.padding(12)) — an all-edges fallback silently pads the cross axis too")
+        XCTAssertEqual(args[0].value, .memberShorthand("top"), "a vertical drag must target the top edge, never left/right")
+        XCTAssertEqual(args[1].value, .integer(12))
+    }
+
+    func testHorizontalFreeformDragTargetsLeadingEdge() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let intent = DragIntent(target: target, parentType: "ZStack", axis: .horizontal, deltaPoints: 9, currentSpacingValue: nil)
+        let mutation = LayoutEngine.mutation(for: intent, stackNodeID: nil)
+
+        guard case .addModifier(_, _, let args) = mutation else {
+            return XCTFail("expected a padding fallback")
+        }
+        XCTAssertEqual(args[0].value, .memberShorthand("leading"), "a horizontal drag must target the leading edge, never top/bottom")
+        XCTAssertEqual(args[1].value, .integer(9))
     }
 
     func testRepeatedFreeformDragMergesIntoExistingPaddingInsteadOfStacking() {

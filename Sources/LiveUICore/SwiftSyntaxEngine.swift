@@ -295,6 +295,8 @@ public enum SwiftSyntaxEngine {
             return floatLiteralExpr(for: v, leadingTrivia: [], trailingTrivia: [])
         case .boolean(let v):
             return ExprSyntax(BooleanLiteralExprSyntax(literal: v ? .keyword(.true) : .keyword(.false)))
+        case .memberShorthand(let name):
+            return ExprSyntax(MemberAccessExprSyntax(base: nil, declName: DeclReferenceExprSyntax(baseName: .identifier(name))))
         case .string:
             throw SwiftSyntaxEngineError.unsupportedLiteral
         }

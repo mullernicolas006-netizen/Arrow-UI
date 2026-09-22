@@ -101,6 +101,36 @@ final class MutationEngineTests: XCTestCase {
         XCTAssertTrue(newSource.contains("Text(\"Title\")"), "the original call must be preserved verbatim")
     }
 
+    /// A vertical drag must only ever touch the vertical edge — the
+    /// unlabeled `.padding(N)` form pads all four sides at once, which
+    /// was an earlier real bug (a vertical-only drag also visibly shoved
+    /// the view sideways). `.padding(.top, N)` round-tripping through
+    /// SwiftSyntax correctly (member-shorthand argument + numeric
+    /// argument) is what LayoutEngine's fallback now always produces.
+    func testAddEdgeSpecificPaddingModifier() throws {
+        let source = """
+        struct ContentView: View {
+            var body: some View {
+                Text("Title")
+            }
+        }
+        """
+        let index = SourceIndexer.index(source: source, filePath: "ContentView.swift")
+        let text = try XCTUnwrap(firstNode(named: "Text", in: index.roots))
+
+        let mutation = Mutation.addModifier(
+            target: text.id,
+            modifierName: "padding",
+            arguments: [
+                MutationArgument(label: nil, value: .memberShorthand("top")),
+                MutationArgument(label: nil, value: .integer(12))
+            ]
+        )
+
+        let (newSource, _) = try MutationEngine.apply(mutation, toSource: source, filePath: "ContentView.swift")
+        XCTAssertTrue(newSource.contains(".padding(.top, 12)"))
+    }
+
     /// Swift has no single "negative literal" token — `-103` parses as a
     /// prefix `-` operator applied to the positive literal `103`, not one
     /// literal reading "-103". A value written naively as a single token

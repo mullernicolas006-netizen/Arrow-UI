@@ -108,16 +108,14 @@ What this deliberately does *not* do yet:
   inserts these tags automatically is future work — see §7's own framing
   of the runtime as something that should eventually be "removable in
   Release builds."
-- **Enum-shorthand modifier arguments** (`.padding(.top, 12)`,
-  `.frame(alignment: .leading)`). `MutationValue` only models literals
-  (int/double/bool/string), not member-access shorthand. `addModifier`
-  therefore only supports things like `.padding(12)` or
-  `.frame(width: 240)` today. Extending `MutationValue` with a
-  `.memberShorthand(String)` case is the natural next step (§18's
-  `.frame(width: 240)` example already works; §15's alternative
-  `.padding(.top, 12)` form does not, though the *simpler* `VStack(spacing:)`
-  form of the same example — the one actually demonstrated end-to-end in
-  `MutationEngineTests` — does).
+- **Enum-shorthand modifier arguments, partially.** `MutationValue` now has
+  a `.memberShorthand(String)` case (e.g. `.padding(.top, 12)`), and
+  `LayoutEngine`'s canvas-drag fallback uses it — this was necessary, not
+  optional: the earlier all-edges `.padding(N)` form silently padded the
+  cross axis too (a vertical drag was visibly also shoving the view
+  sideways). Still only wired up for the padding edge case; other
+  shorthand args (`.frame(alignment: .leading)`, etc.) aren't produced by
+  anything yet, though the model now supports them.
 - **String literal mutation.** Not needed by any §65 MVP property, and the
   exact SwiftSyntax type for string-literal segments has moved across
   versions, so it's stubbed to throw `.unsupportedLiteral` rather than
