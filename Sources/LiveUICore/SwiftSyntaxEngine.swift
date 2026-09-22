@@ -174,6 +174,15 @@ public enum SwiftSyntaxEngine {
                 .with(\.trailingTrivia, trailingTrivia)
             return ExprSyntax(lit.with(\.literal, token))
 
+        case .memberShorthand:
+            // replacingLiteral only ever replaces a numeric/boolean
+            // *value* argument in place — the edge selector in
+            // `.padding(.top, N)` (index 0) is never itself modified,
+            // only added once via addModifier. Reaching here would mean
+            // something tried to overwrite an edge selector, which isn't
+            // a supported operation.
+            throw SwiftSyntaxEngineError.unsupportedLiteral
+
         case .string:
             // Deliberately unsupported for now: the exact SwiftSyntax type
             // for string literal segments has changed across versions and
@@ -296,7 +305,12 @@ public enum SwiftSyntaxEngine {
         case .boolean(let v):
             return ExprSyntax(BooleanLiteralExprSyntax(literal: v ? .keyword(.true) : .keyword(.false)))
         case .memberShorthand(let name):
-            return ExprSyntax(MemberAccessExprSyntax(base: nil, declName: DeclReferenceExprSyntax(baseName: .identifier(name))))
+            // `base:` is a generic parameter (`(some ExprSyntaxProtocol)?`)
+            // — passing an explicit `nil` there fails type inference, so
+            // it's left out entirely to pick up its default (no base),
+            // producing the implicit-member form `.top` rather than
+            // `x.top`.
+            return ExprSyntax(MemberAccessExprSyntax(declName: DeclReferenceExprSyntax(baseName: .identifier(name))))
         case .string:
             throw SwiftSyntaxEngineError.unsupportedLiteral
         }
