@@ -90,6 +90,77 @@ public enum SwiftSyntaxEngine {
         }
     }
 
+    /// Like `findModifierCall(named:startingFrom:)`, but additionally
+    /// requires the call's argument at `argumentIndex` to *currently hold*
+    /// `oldValue`. Needed when several modifiers share the same name — a
+    /// chain with both `.padding(.top, 20)` and `.padding(.leading, 8)`
+    /// has two calls named "padding"; the name alone can't tell you which
+    /// one a mutation actually meant. The value at the given argument
+    /// position is what disambiguates it.
+    public static func findModifierCall(
+        named name: String,
+        argumentIndex: Int,
+        matching oldValue: MutationValue,
+        startingFrom call: FunctionCallExprSyntax
+    ) -> FunctionCallExprSyntax? {
+        var current = call
+        while true {
+            guard let parent = Syntax(current).parent,
+                  let member = parent.as(MemberAccessExprSyntax.self),
+                  let outerCall = member.parent?.as(FunctionCallExprSyntax.self) else {
+                return nil
+            }
+            if member.declName.baseName.text == name,
+               let arg = argument(in: outerCall, label: nil, index: argumentIndex),
+               literalMatches(arg.expression, oldValue) {
+                return outerCall
+            }
+            current = outerCall
+        }
+    }
+
+    /// Walks the *entire* modifier chain (unlike `findModifierCall`, which
+    /// returns the first "padding" match regardless of its argument
+    /// shape) looking for an existing `.padding(<edge>, N)` call for the
+    /// given edge specifically. Multiple `.padding` calls for *different*
+    /// edges legitimately coexist in the same chain (one per axis a view
+    /// has been dragged along) — matching by name alone would find
+    /// whichever one happens to be outermost, not necessarily the one for
+    /// this edge, which is exactly the bug this replaced: a vertical drag
+    /// after a horizontal one couldn't find its own earlier `.top` call
+    /// (no longer outermost) and kept adding new ones instead of merging.
+    public static func findEdgePaddingCall(edge: String, startingFrom call: FunctionCallExprSyntax) -> FunctionCallExprSyntax? {
+        var current = call
+        while true {
+            guard let parent = Syntax(current).parent,
+                  let member = parent.as(MemberAccessExprSyntax.self),
+                  let outerCall = member.parent?.as(FunctionCallExprSyntax.self) else {
+                return nil
+            }
+            if member.declName.baseName.text == "padding",
+               let arg0 = argument(in: outerCall, label: nil, index: 0),
+               let edgeMember = arg0.expression.as(MemberAccessExprSyntax.self),
+               edgeMember.declName.baseName.text == edge {
+                return outerCall
+            }
+            current = outerCall
+        }
+    }
+
+    /// Compares by rendered text rather than AST shape (e.g. `-191` prints
+    /// the same whether it's stored as a `PrefixOperatorExprSyntax` or,
+    /// briefly, a raw token) — simpler and no less correct than pattern-
+    /// matching the literal's syntax kind for this purpose.
+    private static func literalMatches(_ expr: ExprSyntax, _ value: MutationValue) -> Bool {
+        switch value {
+        case .integer(let v):
+            guard let parsed = Int(expr.description.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+            return parsed == v
+        default:
+            return false
+        }
+    }
+
     /// Walks outward through the modifier chain rooted at `call` and
     /// returns the outermost call expression — i.e. the full
     /// `Foo(...).bar().baz()` expression, which is what a new trailing

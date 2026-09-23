@@ -23,11 +23,19 @@ public enum MutationEngine {
             )
             return rewrite(index: index, targetID: node.callExpression.id, replacement: ExprSyntax(newCall), filePath: filePath)
 
-        case .modifyModifierArgument(let target, let modifierName, let label, let argIndex, _, let newValue):
+        case .modifyModifierArgument(let target, let modifierName, let label, let argIndex, let oldValue, let newValue):
             guard let node = SwiftSyntaxEngine.resolve(target, in: index) else {
                 throw SwiftSyntaxEngineError.nodeNotFound(target)
             }
-            guard let modifierCall = SwiftSyntaxEngine.findModifierCall(named: modifierName, startingFrom: node.callExpression) else {
+            // Disambiguates by the *current value* at argIndex, not just
+            // the modifier's name — a chain can have several modifiers
+            // sharing a name (e.g. `.padding(.top, 20)` and
+            // `.padding(.leading, 8)` are both named "padding"), and only
+            // the value at the target argument position identifies which
+            // one a given mutation actually meant.
+            guard let modifierCall = SwiftSyntaxEngine.findModifierCall(
+                named: modifierName, argumentIndex: argIndex, matching: oldValue, startingFrom: node.callExpression
+            ) else {
                 throw SwiftSyntaxEngineError.modifierNotFound(modifierName)
             }
             let newModifierCall = try SwiftSyntaxEngine.replacingArgumentValue(

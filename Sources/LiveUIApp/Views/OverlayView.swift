@@ -194,37 +194,24 @@ struct OverlayView: View {
     }
 
     /// Reads back the value of an existing `.padding(<edge>, N)` modifier
-    /// on `node` *for the given edge*, but only when it's the outermost
-    /// modifier in the chain — i.e. exactly where our own `addModifier`/
-    /// drag mutations always land.
+    /// on `node` for the given edge, searching the *entire* modifier
+    /// chain — not just the outermost link.
     ///
-    /// The edge check matters as much as the outermost check: a vertical
-    /// drag must only ever merge into an existing `.top` padding, never a
-    /// `.leading` one left over from an earlier horizontal drag (that
-    /// would silently apply a vertical delta to a horizontal value).
-    ///
-    /// Deliberately does not use `findModifierCall`, which returns the
-    /// first "padding" match anywhere in the chain: a pre-existing,
-    /// differently-shaped `.padding()` earlier in the chain (e.g. hand-
-    /// written boilerplate) would match that lookup, fail the shape check
-    /// below, and cause every drag to fall back to *adding* a new
-    /// modifier forever — which is exactly what produced eleven stacked
-    /// `.padding(...)` calls in testing. Checking specifically the
-    /// outermost modifier means we only ever merge into a modifier we
-    /// know we (or an equivalent edit) actually added.
+    /// An earlier version only checked the outermost modifier, which
+    /// broke as soon as drags alternated axes: dragging vertically then
+    /// horizontally pushes the `.top` modifier out of "outermost" (the
+    /// new `.leading` one takes that spot), so a *third*, vertical drag
+    /// could no longer find its own earlier `.top` call and added a
+    /// second one instead — both then applied additively, which is why a
+    /// drag's landing position could drift far from where the cursor was
+    /// released. `SwiftSyntaxEngine.findEdgePaddingCall` walks the whole
+    /// chain instead, so it finds the right modifier regardless of how
+    /// many other-edge modifiers were added after it.
     private func currentEdgePadding(of node: IndexedNode, edge: String) -> Int? {
-        let outermost = SwiftSyntaxEngine.outermostChainedExpr(startingFrom: node.callExpression)
-        guard let call = outermost.as(FunctionCallExprSyntax.self),
-              let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-              member.declName.baseName.text == "padding" else {
+        guard let call = SwiftSyntaxEngine.findEdgePaddingCall(edge: edge, startingFrom: node.callExpression),
+              let arg = SwiftSyntaxEngine.argument(in: call, label: nil, index: 1) else {
             return nil
         }
-        let args = Array(call.arguments)
-        guard args.count == 2, args[0].label == nil, args[1].label == nil,
-              let edgeMember = args[0].expression.as(MemberAccessExprSyntax.self),
-              edgeMember.declName.baseName.text == edge else {
-            return nil
-        }
-        return Int(args[1].expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
+        return Int(arg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

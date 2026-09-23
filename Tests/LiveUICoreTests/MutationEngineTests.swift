@@ -131,6 +131,61 @@ final class MutationEngineTests: XCTestCase {
         XCTAssertTrue(newSource.contains(".padding(.top, 12)"))
     }
 
+    /// Reproduces the exact bug seen in real testing: drag vertically,
+    /// then horizontally (which becomes the new outermost modifier), then
+    /// vertically again. The third drag must find and update the *first*
+    /// drag's `.top` modifier — not fail to find it (since it's no longer
+    /// outermost) and add a second, competing `.top` call. Two `.top`
+    /// modifiers apply additively, which is exactly why a drag's landing
+    /// position was drifting away from where the cursor was released.
+    func testAlternatingAxisDragsEachUpdateTheirOwnModifier() throws {
+        let source = """
+        struct ContentView: View {
+            var body: some View {
+                Text("Title")
+            }
+        }
+        """
+        let index = SourceIndexer.index(source: source, filePath: "ContentView.swift")
+        let text = try XCTUnwrap(firstNode(named: "Text", in: index.roots))
+
+        // Drag 1 (vertical): adds .padding(.top, 20)
+        let addTop = Mutation.addModifier(
+            target: text.id, modifierName: "padding",
+            arguments: [MutationArgument(label: nil, value: .memberShorthand("top")), MutationArgument(label: nil, value: .integer(20))]
+        )
+        let (afterTop, _) = try MutationEngine.apply(addTop, toSource: source, filePath: "ContentView.swift")
+        XCTAssertTrue(afterTop.contains(".padding(.top, 20)"))
+
+        // Drag 2 (horizontal): adds a SEPARATE .padding(.leading, 8)
+        let indexAfterTop = SourceIndexer.index(source: afterTop, filePath: "ContentView.swift")
+        let textAfterTop = try XCTUnwrap(firstNode(named: "Text", in: indexAfterTop.roots))
+        let addLeading = Mutation.addModifier(
+            target: textAfterTop.id, modifierName: "padding",
+            arguments: [MutationArgument(label: nil, value: .memberShorthand("leading")), MutationArgument(label: nil, value: .integer(8))]
+        )
+        let (afterLeading, _) = try MutationEngine.apply(addLeading, toSource: afterTop, filePath: "ContentView.swift")
+        XCTAssertTrue(afterLeading.contains(".padding(.top, 20)"))
+        XCTAssertTrue(afterLeading.contains(".padding(.leading, 8)"))
+
+        // Drag 3 (vertical again): must UPDATE the original .top modifier,
+        // even though .leading is now outermost.
+        let indexAfterLeading = SourceIndexer.index(source: afterLeading, filePath: "ContentView.swift")
+        let textAfterLeading = try XCTUnwrap(firstNode(named: "Text", in: indexAfterLeading.roots))
+        let updateTop = Mutation.modifyModifierArgument(
+            target: textAfterLeading.id, modifierName: "padding", argumentLabel: nil, argumentIndex: 1,
+            oldValue: .integer(20), newValue: .integer(34)
+        )
+        let (final, _) = try MutationEngine.apply(updateTop, toSource: afterLeading, filePath: "ContentView.swift")
+
+        XCTAssertTrue(final.contains(".padding(.top, 34)"), "must update the existing .top modifier")
+        XCTAssertFalse(final.contains(".padding(.top, 20)"), "the stale .top value must be gone")
+        XCTAssertTrue(final.contains(".padding(.leading, 8)"), "the unrelated .leading modifier must be untouched")
+
+        let topModifierCount = final.components(separatedBy: ".padding(.top,").count - 1
+        XCTAssertEqual(topModifierCount, 1, "must never end up with two separate .top padding modifiers")
+    }
+
     /// Swift has no single "negative literal" token — `-103` parses as a
     /// prefix `-` operator applied to the positive literal `103`, not one
     /// literal reading "-103". A value written naively as a single token
