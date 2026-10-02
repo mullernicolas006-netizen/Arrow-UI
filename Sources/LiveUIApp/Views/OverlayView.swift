@@ -197,25 +197,31 @@ struct OverlayView: View {
             .allowsHitTesting(false)
     }
 
-    /// §21-26, transactional per §26: only the box being dragged previews
-    /// the movement (via `dragTranslation`), and nothing is written to
-    /// source until the gesture ends, at which point the raw drag is
-    /// translated into a `Mutation` via `LayoutEngine.offsetMutation`.
+    /// §21-26, transactional per §26: nothing is written to source until
+    /// the gesture ends, at which point the raw drag is translated into a
+    /// `Mutation` via `LayoutEngine.offsetMutation`.
     ///
-    /// Writes `.offset(x:, y:)` on the dragged view itself — an explicit
-    /// product decision (see ARCHITECTURE.md): earlier versions tried to
-    /// approximate a drag with a semantic layout property (VStack
-    /// `spacing`, then edge-specific `padding`), but that never lands
-    /// exactly where the cursor was released and, worse, can visibly
-    /// nudge a sibling as a side effect of changing a *shared* layout
-    /// number. `.offset` is a pure rendering displacement — it never
-    /// participates in the parent's layout pass, so it can't resize a
-    /// stack or move anything else, and the view moves by exactly the
-    /// delta given.
+    /// While the drag is *in flight*, every `.onChanged` tick also streams
+    /// a live preview straight to the running app over the existing
+    /// bridge connection (`BridgeMessage.previewMutation`, §25) — the
+    /// *actual* button/text in the Simulator moves in real time, not a
+    /// screenshot crop and not just the desktop-side outline box. See
+    /// `LiveUIPreviewStore` on the runtime side for how that's applied.
+    /// This needs a connected runtime to do anything visible; with none
+    /// connected it's a harmless no-op and the outline/content-crop
+    /// preview are all you see, same as before.
     ///
-    /// Unlike the old single-axis approach, both components of the drag
-    /// are applied — a diagonal drag no longer silently drops whichever
-    /// axis moved less.
+    /// Writes `.offset(x:, y:)` on the dragged view itself once the drag
+    /// ends — an explicit product decision (see ARCHITECTURE.md): earlier
+    /// versions tried to approximate a drag with a semantic layout
+    /// property (VStack `spacing`, then edge-specific `padding`), but
+    /// that never lands exactly where the cursor was released and, worse,
+    /// can visibly nudge a sibling as a side effect of changing a
+    /// *shared* layout number. `.offset` is a pure rendering displacement
+    /// — it never participates in the parent's layout pass, so it can't
+    /// resize a stack or move anything else, and the view moves by
+    /// exactly the delta given. Both axes of a diagonal drag are applied
+    /// independently, not just whichever moved more.
     private func dragGesture(transform: CanvasTransform) -> some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .local)
             .onChanged { value in
@@ -237,6 +243,13 @@ struct OverlayView: View {
                     }
                 }
                 dragTranslation = value.translation
+
+                if let hitID = dragStartRuntimeID, transform.scale > 0 {
+                    let deltaX = value.translation.width / transform.scale
+                    let deltaY = value.translation.height / transform.scale
+                    state.sendPreview(.previewMutation(nodeID: hitID, property: "offsetX", value: deltaX))
+                    state.sendPreview(.previewMutation(nodeID: hitID, property: "offsetY", value: deltaY))
+                }
             }
             .onEnded { value in
                 defer {
@@ -249,6 +262,7 @@ struct OverlayView: View {
                 }
                 guard transform.scale > 0 else {
                     print("[LiveUI] canvas: bad scale — no mutation")
+                    state.sendPreview(.clearPreview)
                     return
                 }
 
@@ -261,11 +275,28 @@ struct OverlayView: View {
                 // one sees the first one's on-disk result) — a diagonal
                 // drag must move the view diagonally, not just along
                 // whichever axis happened to be larger.
+                var mutated = false
                 if abs(deltaX) >= 1 {
                     applyOffset(hitID: hitID, axis: .horizontal, delta: deltaX)
+                    mutated = true
                 }
                 if abs(deltaY) >= 1 {
                     applyOffset(hitID: hitID, axis: .vertical, delta: deltaY)
+                    mutated = true
+                }
+
+                // A real drag leaves the live preview exactly where it
+                // was — it bridges smoothly into the rebuild/relaunch
+                // that's now in flight, since the relaunched app is a
+                // fresh process where this transient state no longer
+                // exists anyway, replaced by the newly-compiled real
+                // .offset(). A no-op drag (below the threshold on both
+                // axes) wrote nothing to source, so the preview has to be
+                // reverted here instead, or the real app would be left
+                // visibly nudged by an amount nothing on disk accounts
+                // for.
+                if !mutated {
+                    state.sendPreview(.clearPreview)
                 }
             }
     }

@@ -77,6 +77,12 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Sends a message to the connected runtime (today, just the live
+    /// drag preview — §25). A no-op if nothing's connected.
+    public func sendPreview(_ message: BridgeMessage) {
+        bridge.broadcast(message)
+    }
+
     private func handle(_ message: RuntimeMessage) {
         switch message {
         case .hello(_, let bundleIdentifier, let screenWidth, let screenHeight):

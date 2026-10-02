@@ -81,18 +81,53 @@ What this deliberately does *not* do yet:
   replacement for just the polling loop in `SimulatorScreenMirror`; it
   was deliberately *not* used for this first pass so the core
   click/drag-to-mutate loop has zero risky/private-API dependencies.
-- **The drag preview now carries real content, not an empty box.**
+- **The real view moves live during a drag, via the bridge — not touch
+  injection.** `RuntimeWireProtocol.BridgeMessage` already had
+  `.previewMutation(nodeID:property:value:)`/`.clearPreview` cases from
+  early on (§25), but nothing sent or received them until now. Every
+  `OverlayView` drag's `.onChanged` tick streams the live delta (device
+  points, same math as the final mutation) to the connected runtime via
+  `AppState.sendPreview` -> `BridgeServer.broadcast`. On the runtime side,
+  `LiveUIEditModeRoot` owns a `LiveUIPreviewStore` (an `ObservableObject`
+  keyed by the same `.liveUITag` id strings), injects it via
+  `.environmentObject`, and feeds it from `BridgeClient.onMessage`.
+  `LiveUITagModifier` reads `previewStore.offsets[id]` and applies it as
+  an `.offset()` on `content` *before* its own geometry-reporting
+  `GeometryReader`, so the reported geometry — and therefore the
+  desktop-side selection box and hit-testing — also stays in sync with
+  the view while it's moving.
+
+  This only ever holds the *delta* of whichever drag is in flight, not a
+  view's total offset: a previous drag's rebuild already baked its own
+  `.offset()` into the compiled binary, and this is layered on top of
+  that. A real drag (one that ends up writing a mutation) deliberately
+  leaves the preview in place rather than clearing it — clearing
+  immediately would visually snap the view back until the rebuild
+  finishes, and then snap again when it does; leaving it bridges
+  smoothly into the relaunch, since a relaunched app is a fresh process
+  where this transient state is simply gone, replaced by the newly
+  compiled real `.offset()`. A no-op drag (below the apply threshold on
+  both axes, so nothing was written to source) does send `.clearPreview`,
+  since otherwise the real app would be left visibly nudged by an amount
+  nothing on disk accounts for. With no runtime connected, every
+  `sendPreview` call is a harmless no-op (`BridgeServer.broadcast` to
+  zero connections) — the outline box and the screenshot-crop preview
+  below are all you see in that case, same as before this existed.
+- **The drag preview also carries real content as a screenshot crop, as
+  a zero-latency complement to the above.**
   `OverlayView.draggedContentPreview` re-renders the *same already-loaded*
   mirror image, shifted so the dragged view's own region lands at the
   origin of a `size`-constrained, clipped frame — a "window into a larger
   image" with no pixel copying, automatically aligned with
   `CanvasTransform` since it reuses the exact `origin`/`size` math the
   selection box itself uses. This is still built from the last polled
-  screenshot (see "still-image poll" above), so it's the view's
-  last-known appearance moving with the cursor, not a true re-render —
-  but it's real content, not a placeholder rectangle. Drawn before the
-  selection-outline `ForEach` in the `ZStack` so the outline still shows
-  as a border on top of it rather than being covered.
+  screenshot (see "still-image poll" above), so on its own it's the
+  view's last-known appearance moving with the cursor, not a true
+  re-render — but combined with the real live-offset mechanism above, the
+  mirror's own next poll tick (≤0.5s later) will *also* show the real,
+  now-moved view, since the actual app is really rendering it there.
+  Drawn before the selection-outline `ForEach` in the `ZStack` so the
+  outline still shows as a border on top of it rather than being covered.
 - **No input is forwarded into the Simulator.** Selection and dragging
   happen entirely on LiveUI's own canvas, hit-tested against
   `RuntimeGeometry` LiveUI already collects — the running app never

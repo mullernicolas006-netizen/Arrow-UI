@@ -21,6 +21,7 @@ import UIKit
 /// ```
 public struct LiveUIEditModeRoot<Content: View>: View {
     @StateObject private var client: BridgeClient
+    @StateObject private var previewStore = LiveUIPreviewStore()
     private let appName: String
     private let bundleIdentifier: String
     private let content: Content
@@ -34,10 +35,17 @@ public struct LiveUIEditModeRoot<Content: View>: View {
 
     public var body: some View {
         content
+            .environmentObject(previewStore)
             .onPreferenceChange(LiveUIGeometryPreferenceKey.self) { views in
                 client.send(.snapshot(views: views))
             }
             .onAppear {
+                // Desktop -> runtime messages (currently just the live
+                // drag preview, §25) arrive here and are applied directly
+                // to the store every `.liveUITag`'d view already reads.
+                client.onMessage = { message in
+                    previewStore.apply(message)
+                }
                 client.connect(appName: appName, bundleIdentifier: bundleIdentifier, screenSize: currentScreenSize())
             }
     }

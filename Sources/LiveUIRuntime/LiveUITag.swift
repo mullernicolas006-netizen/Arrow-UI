@@ -21,29 +21,42 @@ public struct LiveUITagModifier: ViewModifier {
     let structuralPath: String
     let parentID: String?
 
+    /// Injected by `LiveUIEditModeRoot`. Reading `.offsets[id]` here (and
+    /// applying it to `content` below) is what makes a canvas drag move
+    /// the *real* view live, before any source mutation or rebuild — see
+    /// `LiveUIPreviewStore`'s doc comment.
+    @EnvironmentObject private var previewStore: LiveUIPreviewStore
+
     public func body(content: Content) -> some View {
-        content.background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: LiveUIGeometryPreferenceKey.self,
-                    value: [
-                        RuntimeViewInfo(
-                            id: id,
-                            typeName: typeName,
-                            file: file,
-                            structuralPath: structuralPath,
-                            geometry: RuntimeGeometry(
-                                x: proxy.frame(in: .global).minX,
-                                y: proxy.frame(in: .global).minY,
-                                width: proxy.size.width,
-                                height: proxy.size.height
-                            ),
-                            parentID: parentID
-                        )
-                    ]
-                )
-            }
-        )
+        content
+            // Applied to `content` *before* the geometry reader below, so
+            // the reported geometry also reflects the live nudge — the
+            // desktop app's own selection box and hit-testing stay in
+            // sync with the view while it's being dragged, not just the
+            // view itself.
+            .offset(previewStore.offsets[id] ?? .zero)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: LiveUIGeometryPreferenceKey.self,
+                        value: [
+                            RuntimeViewInfo(
+                                id: id,
+                                typeName: typeName,
+                                file: file,
+                                structuralPath: structuralPath,
+                                geometry: RuntimeGeometry(
+                                    x: proxy.frame(in: .global).minX,
+                                    y: proxy.frame(in: .global).minY,
+                                    width: proxy.size.width,
+                                    height: proxy.size.height
+                                ),
+                                parentID: parentID
+                            )
+                        ]
+                    )
+                }
+            )
     }
 }
 
