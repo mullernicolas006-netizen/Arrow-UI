@@ -91,6 +91,15 @@ What this deliberately does *not* do yet:
   only matter for letting Edit Mode also interact with the live app
   (typing into fields, exercising real button actions) — a distinct,
   later feature.
+- **Selection outlines are hover/selection-only, not always-on.** Early
+  versions drew a box for *every* known view simultaneously. Since a
+  parent's box always encloses its children's (a VStack's box always
+  contains its Button's), that read as visual noise and was genuinely
+  indistinguishable from "dragging one view also moved another one" — a
+  real bug report that turned out to be this rendering choice, not a
+  mutation bug. `OverlayView` now hit-tests the mouse position on every
+  `.onContinuousHover` tick (suppressed mid-drag) and only draws a box for
+  the view that's hovered, selected, or actively being dragged.
 - **Canvas drags don't know their parent yet.** `LayoutEngine.mutation`
   can produce the "grow the VStack's spacing" mutation, but only when
   given a `parentType`/`stackNodeID` — and `OverlayView`'s drag gesture

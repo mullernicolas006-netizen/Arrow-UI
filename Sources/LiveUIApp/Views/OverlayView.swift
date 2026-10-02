@@ -18,6 +18,14 @@ struct OverlayView: View {
     @StateObject private var mirror = SimulatorScreenMirror()
     @State private var dragStartRuntimeID: String?
     @State private var dragTranslation: CGSize = .zero
+    /// The innermost view currently under the mouse (hit-tested the same
+    /// way a click is), so the canvas can show *one* outline at a time
+    /// instead of every view's box simultaneously. Showing all of them at
+    /// once — e.g. a VStack's box and its Button child's box, which always
+    /// overlap since the parent encloses the child — was indistinguishable
+    /// from "the wrong view moved" and made the canvas look like visual
+    /// noise; this is the actual fix for both complaints.
+    @State private var hoveredRuntimeID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,6 +53,19 @@ struct OverlayView: View {
                 }
                 .contentShape(Rectangle())
                 .gesture(dragGesture(transform: transform))
+                .onContinuousHover { phase in
+                    // Suppressed mid-drag: otherwise the mouse passing over
+                    // a different view while dragging would show a second,
+                    // unrelated box alongside the one actually being
+                    // dragged.
+                    guard dragStartRuntimeID == nil else { return }
+                    switch phase {
+                    case .active(let location):
+                        hoveredRuntimeID = hitTest(devicePoint: transform.devicePoint(location))
+                    case .ended:
+                        hoveredRuntimeID = nil
+                    }
+                }
             }
             .clipped()
         }
@@ -86,32 +107,50 @@ struct OverlayView: View {
         .padding(8)
     }
 
+    /// Only draws a box for the view that's selected, actively being
+    /// dragged, or directly under the mouse right now — never all known
+    /// views at once. A parent's box always encloses its children's (a
+    /// VStack always contains its Button), so drawing every box
+    /// permanently made the canvas an unreadable stack of overlapping
+    /// rectangles and looked like dragging one view moved another one.
+    @ViewBuilder
     private func boxView(id: String, geometry: RuntimeGeometry, transform: CanvasTransform) -> some View {
         let isSelected = state.selection?.description == id
         let isDragging = dragStartRuntimeID == id
-        let origin = transform.point(CGPoint(x: geometry.x, y: geometry.y))
-        let size = transform.size(CGSize(width: geometry.width, height: geometry.height))
+        let isHovered = hoveredRuntimeID == id
 
-        // White stroke + .difference blend mode (the same trick Xcode/
-        // design tools use for selection outlines): renders black against
-        // light backgrounds and white against dark ones automatically, so
-        // it's never invisible regardless of what's under it.
-        return Rectangle()
-            .strokeBorder(Color.white, lineWidth: isSelected || isDragging ? 2.5 : 1)
-            .frame(width: max(size.width, 1), height: max(size.height, 1))
-            .position(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
-            .offset(isDragging ? dragTranslation : .zero)
-            .blendMode(.difference)
-            .overlay(alignment: .topLeading) {
-                Text(id)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.white)
-                    .blendMode(.difference)
-            }
-            // Hit-testing is done manually below, against `runtimeGeometry`
-            // directly, so one gesture on the whole canvas handles both
-            // selection and dragging instead of fighting per-box gestures.
-            .allowsHitTesting(false)
+        if isSelected || isDragging || isHovered {
+            let origin = transform.point(CGPoint(x: geometry.x, y: geometry.y))
+            let size = transform.size(CGSize(width: geometry.width, height: geometry.height))
+
+            // White stroke + .difference blend mode (the same trick Xcode/
+            // design tools use for selection outlines): renders black
+            // against light backgrounds and white against dark ones
+            // automatically, so it's never invisible regardless of what's
+            // under it.
+            Rectangle()
+                .strokeBorder(Color.white, lineWidth: isSelected || isDragging ? 2.5 : 1)
+                .frame(width: max(size.width, 1), height: max(size.height, 1))
+                .position(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+                .offset(isDragging ? dragTranslation : .zero)
+                .blendMode(.difference)
+                .overlay(alignment: .topLeading) {
+                    // Just the type name ("Button"), not the full
+                    // "Button@ContentView.swift#1" runtime id — that's
+                    // debugging detail, not something a user needs to see
+                    // on every hover.
+                    Text(id.components(separatedBy: "@").first ?? id)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white)
+                        .blendMode(.difference)
+                        .padding(.leading, 2)
+                }
+                // Hit-testing is done manually below, against
+                // `runtimeGeometry` directly, so one gesture on the whole
+                // canvas handles both selection and dragging instead of
+                // fighting per-box gestures.
+                .allowsHitTesting(false)
+        }
     }
 
     /// §21-26, transactional per §26: only the box being dragged previews
