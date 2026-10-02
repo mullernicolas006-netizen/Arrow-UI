@@ -55,6 +55,7 @@ require re-deriving the logic.
 | §6.1, §20, §23 | Desktop app shell, hierarchy, inspector | `LiveUIApp/*` |
 | §21-26 | Direct manipulation: click-to-select + drag-to-mutate on the canvas | `LiveUIApp/Views/OverlayView.swift` |
 | §22-23 | Screen mirroring, coordinate mapping | `LiveUIApp/Mirroring/{SimulatorScreenMirror,CanvasTransform}.swift` |
+| — | Automatic rebuild + reinstall + relaunch after a mutation | `LiveUIApp/Build/{PlaygroundBuildRunner,SimulatorDeviceFinder}.swift` |
 
 Everything above is real logic with a clear, single responsibility — not
 placeholders. The mutation engine specifically implements the exact
@@ -99,6 +100,34 @@ What this deliberately does *not* do yet:
   spacing stepper already proves the smarter VStack-spacing path works
   end to end; wiring `parentID` through is what's needed to get the same
   smarts from a canvas drag.
+
+## Automatic rebuild + relaunch
+
+`AppState.apply(_:)` schedules a debounced (1.5s) rebuild after every
+successful mutation via `PlaygroundBuildRunner`: finds the booted
+Simulator (`xcrun simctl list devices booted -j`), runs `xcodebuild`
+against an auto-detected `.xcodeproj` (`AppState.openProject` searches
+`projectRoot` and up to 4 parent directories for one `.xcodeproj`, and
+assumes the scheme name matches the project's filename — true for an
+unmodified Xcode "App" template, not guaranteed for a renamed/multi-scheme
+project), installs the result (`simctl install`), and relaunches it
+(`simctl launch`, using the bundle identifier reported in the runtime's
+`.hello` message). Debounced and single-flight: several quick drags in a
+row trigger one rebuild, not one per drag, and a rebuild already in
+flight is left to finish rather than restarted.
+
+**Not yet verified against a real build** — this is the same category of
+risk as the SwiftSyntax code: written from documented `xcodebuild`/
+`simctl` behavior, not run against a compiler. The specific things to
+check if it doesn't work on the first try: whether `-destination
+"platform=iOS Simulator,id=<udid>"` is accepted as written, and whether
+the built `.app` really lands at `<derivedDataPath>/Build/Products/
+Debug-iphonesimulator/` for this project's build settings (that path
+shape is a long-stable Xcode convention, but an unusual project
+configuration could still place it elsewhere). Both failures print the
+full `xcodebuild`/`simctl` output to the `LiveUIApp` terminal via
+`print()`, following the same "make failures visible, not silent"
+approach that found every bridge/connection bug earlier.
 
 ## What is *not* implemented (deliberately out of MVP scope, §65-67)
 

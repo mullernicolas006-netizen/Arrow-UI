@@ -63,6 +63,17 @@ struct OverlayView: View {
             Text("· \(state.runtimeGeometry.count) view(s)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if state.isBuilding {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 12, height: 12)
+            }
+            if let status = state.buildStatus {
+                Text("· \(status)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Spacer()
             if let error = mirror.lastError {
                 Text(error)

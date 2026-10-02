@@ -24,8 +24,19 @@ public final class AppState: ObservableObject {
     @Published public private(set) var canUndo: Bool = false
     @Published public private(set) var canRedo: Bool = false
 
+    /// The `.xcodeproj` auto-detected near `projectRoot` (§6.1) — needed to
+    /// drive `xcodebuild` for the automatic rebuild-and-relaunch loop.
+    @Published public private(set) var xcodeProjectPath: URL?
+    @Published public private(set) var scheme: String?
+    /// From the runtime's `.hello` message — needed to `simctl launch` the
+    /// rebuilt app.
+    @Published public private(set) var connectedBundleIdentifier: String?
+    @Published public private(set) var isBuilding: Bool = false
+    @Published public private(set) var buildStatus: String?
+
     public let history = HistoryEngine()
     private let bridge = BridgeServer()
+    private let buildRunner = PlaygroundBuildRunner()
     private var cancellables = Set<AnyCancellable>()
 
     public init() {
@@ -42,6 +53,20 @@ public final class AppState: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] message in self?.lastError = message }
             .store(in: &cancellables)
+
+        buildRunner.$isBuilding
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in self?.isBuilding = value }
+            .store(in: &cancellables)
+        buildRunner.$lastStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in self?.buildStatus = value }
+            .store(in: &cancellables)
+        buildRunner.$lastError
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in self?.lastError = message }
+            .store(in: &cancellables)
     }
 
     public func startBridge() {
@@ -54,8 +79,9 @@ public final class AppState: ObservableObject {
 
     private func handle(_ message: RuntimeMessage) {
         switch message {
-        case .hello(_, _, let screenWidth, let screenHeight):
+        case .hello(_, let bundleIdentifier, let screenWidth, let screenHeight):
             isRuntimeConnected = true
+            connectedBundleIdentifier = bundleIdentifier
             if screenWidth > 0, screenHeight > 0 {
                 deviceScreenSize = CGSize(width: screenWidth, height: screenHeight)
             }
@@ -72,7 +98,30 @@ public final class AppState: ObservableObject {
 
     public func openProject(at url: URL) {
         projectRoot = url
+        xcodeProjectPath = Self.findXcodeProject(near: url)
+        scheme = xcodeProjectPath?.deletingPathExtension().lastPathComponent
+        if xcodeProjectPath == nil {
+            lastError = "Couldn't find a .xcodeproj near \(url.path) — automatic rebuild-and-relaunch after a drag won't be available for this project (everything else still works)."
+        }
         reindex()
+    }
+
+    /// Looks in `root` and up to 4 parent directories for a single
+    /// `.xcodeproj` — `root` is usually the source folder *inside* the
+    /// Xcode project directory (e.g. `MyApp/MyApp/`), so the project file
+    /// itself is typically one level up (`MyApp/MyApp.xcodeproj`).
+    private static func findXcodeProject(near root: URL) -> URL? {
+        var directory = root
+        for _ in 0..<5 {
+            if let found = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .first(where: { $0.pathExtension == "xcodeproj" }) {
+                return found
+            }
+            let parent = directory.deletingLastPathComponent()
+            if parent == directory { break }
+            directory = parent
+        }
+        return nil
     }
 
     public func reindex() {
@@ -108,6 +157,10 @@ public final class AppState: ObservableObject {
             lastDiff = diff
             lastError = nil
             fileIndexes[file] = SourceIndexer.index(source: newSource, filePath: file)
+
+            if let xcodeProjectPath, let scheme, let bundleIdentifier = connectedBundleIdentifier {
+                buildRunner.scheduleRebuild(xcodeProjectPath: xcodeProjectPath, scheme: scheme, bundleIdentifier: bundleIdentifier)
+            }
         } catch {
             // §29: a mutation that can't be safely applied must never touch
             // the file on disk — currentSource/fileIndexes are untouched here.
