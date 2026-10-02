@@ -216,18 +216,29 @@ struct OverlayView: View {
                 // dragged view itself — see `parent(of:)`'s doc comment for
                 // why that's the fix for drags that looked like they
                 // changed the wrong thing.
+                //
+                // Only safe with *exactly* two children: `spacing` is one
+                // shared number for every adjacent gap in the stack, so
+                // growing it with 3+ children also pushes every later
+                // sibling down (or right), not just the dragged view —
+                // which is indistinguishable from "dragging this button
+                // also moved the other button." With only two children
+                // there's exactly one gap, so it's unambiguous. With more,
+                // fall back to padding just the dragged view, which never
+                // touches a sibling.
                 let parentNode = state.parent(of: node.id)
-                print("[LiveUI] canvas: parent of \(node.id) is \(parentNode?.id.description ?? "none")")
+                let spacingIsUnambiguous = parentNode?.children.count == 2
+                print("[LiveUI] canvas: parent of \(node.id) is \(parentNode?.id.description ?? "none"), children=\(parentNode?.children.count ?? 0), spacingPath=\(spacingIsUnambiguous)")
 
                 let intent = DragIntent(
                     target: node.id,
-                    parentType: parentNode?.id.typeName,
+                    parentType: spacingIsUnambiguous ? parentNode?.id.typeName : nil,
                     axis: axis,
                     deltaPoints: rawDelta / transform.scale,
-                    currentSpacingValue: parentNode.flatMap { currentSpacing(of: $0) },
+                    currentSpacingValue: spacingIsUnambiguous ? parentNode.flatMap { currentSpacing(of: $0) } : nil,
                     currentPaddingValue: currentEdgePadding(of: node, edge: LayoutEngine.edgeName(for: axis))
                 )
-                let mutation = LayoutEngine.mutation(for: intent, stackNodeID: parentNode?.id)
+                let mutation = LayoutEngine.mutation(for: intent, stackNodeID: spacingIsUnambiguous ? parentNode?.id : nil)
                 print("[LiveUI] canvas: applying \(mutation)")
                 state.apply(mutation)
             }

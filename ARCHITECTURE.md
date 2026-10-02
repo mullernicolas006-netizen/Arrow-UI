@@ -113,17 +113,34 @@ What this deliberately does *not* do yet:
   dragged child directly (the old fallback, always taken) *also* visibly
   changes the gap to its sibling as a side effect, which reads exactly
   like "dragging the button changed something about the text" even
-  though only the button's own modifier chain was touched. Known
-  remaining imprecision in this heuristic (not fixed by this change,
-  inherent to "change one spacing number" rather than pixel-position
-  dragging): with more than two children in the stack, `spacing` applies
-  uniformly between *every* adjacent pair, so dragging the *first* child
-  down moves its later siblings (spacing is measured from it) rather than
-  moving the first child itself, since VStack always top-anchors its
-  first child. Dragging the *last* child (the common case) behaves
-  correctly. A drag on a view with no stack parent (the VStack itself, or
-  any view directly inside a `ZStack`) still uses the padding fallback —
-  there's no sibling spacing to grow in that case.
+  though only the button's own modifier chain was touched.
+
+  The spacing path is only taken when the stack has **exactly two
+  children** (`OverlayView`'s `spacingIsUnambiguous` check). `spacing` is
+  one shared number for *every* adjacent gap in a stack — with 3+
+  children, growing it to move the dragged view also pushes every later
+  sibling down (or right), which is exactly the "dragging this button
+  also moved the other button" bug reported in real testing. With exactly
+  two children there's only one gap, so it's unambiguous; with more, the
+  drag falls back to padding just the dragged view, which never touches a
+  sibling. A drag on a view with no stack parent at all (the VStack
+  itself, or any view directly inside a `ZStack`) also uses the padding
+  fallback.
+
+  **Open product question, not yet resolved:** even the padding fallback
+  and the two-child spacing path only ever land a drag *approximately*
+  where the cursor was released, by construction — they write a semantic
+  layout property (a spacing or padding number), not an absolute
+  position, which is the whole point of this tool per the original spec
+  (§5-6: never a raw `.offset()`/pixel hack). Real user testing keeps
+  running into this as "it doesn't land exactly where I dragged it," which
+  is the expected result of that design choice, not a bug to be patched
+  away incrementally. The real fork: keep semantic-only mutations (accept
+  approximate landing as the cost of minimal, meaningful diffs) vs. add an
+  explicit opt-in escape hatch that writes `.offset(x:y:)`/`.position()`
+  when the user wants exact pixel placement badly enough to accept a less
+  meaningful diff. Needs a decision before more precision work here is
+  worth doing.
 
 ## Automatic rebuild + relaunch
 
