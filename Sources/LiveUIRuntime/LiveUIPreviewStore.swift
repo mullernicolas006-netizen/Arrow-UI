@@ -28,8 +28,10 @@ public final class LiveUIPreviewStore: ObservableObject {
         case .previewOffset(let nodeID, let x, let y):
             // One atomic write — both axes change together, in the same
             // render, instead of x and y each triggering their own.
+            print("[LiveUI] PreviewStore: applying offset \(nodeID) -> (\(x), \(y))")
             offsets[nodeID] = CGSize(width: x, height: y)
         case .clearPreview:
+            print("[LiveUI] PreviewStore: clearPreview")
             offsets.removeAll()
         case .requestSnapshot:
             break

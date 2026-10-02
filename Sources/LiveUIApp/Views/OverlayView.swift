@@ -208,6 +208,7 @@ struct OverlayView: View {
                     // updates (and renders) on the runtime side per tick,
                     // which looked like the view taking two small steps
                     // instead of one smooth one.
+                    print("[LiveUI] canvas: sendPreview \(hitID) x=\(deltaX) y=\(deltaY), runtimeConnected=\(state.isRuntimeConnected)")
                     state.sendPreview(.previewOffset(nodeID: hitID, x: deltaX, y: deltaY))
                 }
             }

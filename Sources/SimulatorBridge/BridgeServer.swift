@@ -51,10 +51,20 @@ public final class BridgeServer: ObservableObject {
     /// Sends a message to every connected app. In practice there's usually
     /// exactly one (the app currently running in the Simulator).
     public func broadcast(_ message: BridgeMessage) {
-        guard let data = try? JSONEncoder().encode(message) else { return }
+        guard let data = try? JSONEncoder().encode(message) else {
+            print("[LiveUI] BridgeServer: broadcast() failed to encode \(message)")
+            return
+        }
         let framed = Framing.encode(data)
+        if connections.isEmpty {
+            print("[LiveUI] BridgeServer: broadcast() called with ZERO connections — \(message) goes nowhere")
+        }
         for connection in connections.values {
-            connection.send(content: framed, completion: .contentProcessed { _ in })
+            connection.send(content: framed, completion: .contentProcessed { error in
+                if let error {
+                    print("[LiveUI] BridgeServer: broadcast send failed — \(error)")
+                }
+            })
         }
     }
 

@@ -131,8 +131,16 @@ public final class BridgeClient: ObservableObject {
             if let data, !data.isEmpty {
                 self.receiveBuffer.append(data)
                 for line in Framing.extractLines(from: &self.receiveBuffer) {
-                    if let message = try? JSONDecoder().decode(BridgeMessage.self, from: line) {
-                        DispatchQueue.main.async { self.onMessage?(message) }
+                    do {
+                        let message = try JSONDecoder().decode(BridgeMessage.self, from: line)
+                        DispatchQueue.main.async {
+                            if self.onMessage == nil {
+                                print("[LiveUI] BridgeClient: received \(message) but onMessage is nil — dropped")
+                            }
+                            self.onMessage?(message)
+                        }
+                    } catch {
+                        print("[LiveUI] BridgeClient: FAILED to decode BridgeMessage (\(error)) — raw: \(String(data: line, encoding: .utf8) ?? "<non-utf8, \(line.count) bytes>")")
                     }
                 }
             }
