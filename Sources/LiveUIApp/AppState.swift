@@ -163,10 +163,7 @@ public final class AppState: ObservableObject {
             lastDiff = diff
             lastError = nil
             fileIndexes[file] = SourceIndexer.index(source: newSource, filePath: file)
-
-            if let xcodeProjectPath, let scheme, let bundleIdentifier = connectedBundleIdentifier {
-                buildRunner.scheduleRebuild(xcodeProjectPath: xcodeProjectPath, scheme: scheme, bundleIdentifier: bundleIdentifier)
-            }
+            scheduleRebuildIfPossible()
         } catch {
             // §29: a mutation that can't be safely applied must never touch
             // the file on disk — currentSource/fileIndexes are untouched here.
@@ -179,6 +176,7 @@ public final class AppState: ObservableObject {
         try? record.oldSource.write(toFile: record.file, atomically: true, encoding: .utf8)
         fileIndexes[record.file] = SourceIndexer.index(source: record.oldSource, filePath: record.file)
         refreshHistoryFlags()
+        scheduleRebuildIfPossible()
     }
 
     public func redo() {
@@ -186,6 +184,19 @@ public final class AppState: ObservableObject {
         try? record.newSource.write(toFile: record.file, atomically: true, encoding: .utf8)
         fileIndexes[record.file] = SourceIndexer.index(source: record.newSource, filePath: record.file)
         refreshHistoryFlags()
+        scheduleRebuildIfPossible()
+    }
+
+    /// `apply`/`undo`/`redo` all write a different version of a file to
+    /// disk and all need the same thing to happen next: rebuild, reinstall,
+    /// relaunch, so the Simulator actually reflects it. `undo`/`redo`
+    /// previously skipped this entirely — the file on disk was correctly
+    /// reverted, but nothing told the running app to catch up, so undo
+    /// visibly "did nothing" until some unrelated later drag happened to
+    /// trigger a rebuild that then showed the reverted state.
+    private func scheduleRebuildIfPossible() {
+        guard let xcodeProjectPath, let scheme, let bundleIdentifier = connectedBundleIdentifier else { return }
+        buildRunner.scheduleRebuild(xcodeProjectPath: xcodeProjectPath, scheme: scheme, bundleIdentifier: bundleIdentifier)
     }
 
     private func refreshHistoryFlags() {
