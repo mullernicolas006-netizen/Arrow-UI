@@ -81,6 +81,18 @@ What this deliberately does *not* do yet:
   replacement for just the polling loop in `SimulatorScreenMirror`; it
   was deliberately *not* used for this first pass so the core
   click/drag-to-mutate loop has zero risky/private-API dependencies.
+- **The drag preview now carries real content, not an empty box.**
+  `OverlayView.draggedContentPreview` re-renders the *same already-loaded*
+  mirror image, shifted so the dragged view's own region lands at the
+  origin of a `size`-constrained, clipped frame — a "window into a larger
+  image" with no pixel copying, automatically aligned with
+  `CanvasTransform` since it reuses the exact `origin`/`size` math the
+  selection box itself uses. This is still built from the last polled
+  screenshot (see "still-image poll" above), so it's the view's
+  last-known appearance moving with the cursor, not a true re-render —
+  but it's real content, not a placeholder rectangle. Drawn before the
+  selection-outline `ForEach` in the `ZStack` so the outline still shows
+  as a border on top of it rather than being covered.
 - **No input is forwarded into the Simulator.** Selection and dragging
   happen entirely on LiveUI's own canvas, hit-tested against
   `RuntimeGeometry` LiveUI already collects — the running app never
