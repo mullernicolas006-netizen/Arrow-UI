@@ -158,13 +158,14 @@ struct OverlayView: View {
     /// source until the gesture ends, at which point the raw drag is
     /// translated into a semantic `Mutation` via `LayoutEngine`.
     ///
-    /// Known limitation (see ARCHITECTURE.md): `parentType`/`stackNodeID`
-    /// aren't wired up from the runtime yet (that needs `RuntimeViewInfo
-    /// .parentID` to actually be populated, which today's manual
-    /// `.liveUITag` call sites don't do), so every canvas drag currently
-    /// takes LayoutEngine's padding fallback rather than the "grow the
-    /// VStack's spacing" path — that smarter path is already proven end to
-    /// end, just via the Inspector's stepper instead of a canvas drag.
+    /// `parentType`/`stackNodeID` are resolved from the *indexed source
+    /// tree* via `AppState.parent(of:)`, not from the runtime (today's
+    /// manual `.liveUITag` call sites still don't populate
+    /// `RuntimeViewInfo.parentID` — this path doesn't need them to). A
+    /// drag on a view sitting directly inside a `VStack`/`HStack`, along
+    /// that stack's own axis, takes LayoutEngine's "grow the stack's
+    /// spacing" path; anything else (no stack parent, or a cross-axis
+    /// drag) falls back to padding the dragged view itself.
     private func dragGesture(transform: CanvasTransform) -> some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .local)
             .onChanged { value in
@@ -209,15 +210,24 @@ struct OverlayView: View {
                     return
                 }
 
+                // If the dragged view sits directly inside a VStack/HStack
+                // whose own axis matches the drag, LayoutEngine takes the
+                // "grow the stack's spacing" path instead of padding the
+                // dragged view itself — see `parent(of:)`'s doc comment for
+                // why that's the fix for drags that looked like they
+                // changed the wrong thing.
+                let parentNode = state.parent(of: node.id)
+                print("[LiveUI] canvas: parent of \(node.id) is \(parentNode?.id.description ?? "none")")
+
                 let intent = DragIntent(
                     target: node.id,
-                    parentType: nil,
+                    parentType: parentNode?.id.typeName,
                     axis: axis,
                     deltaPoints: rawDelta / transform.scale,
-                    currentSpacingValue: nil,
+                    currentSpacingValue: parentNode.flatMap { currentSpacing(of: $0) },
                     currentPaddingValue: currentEdgePadding(of: node, edge: LayoutEngine.edgeName(for: axis))
                 )
-                let mutation = LayoutEngine.mutation(for: intent, stackNodeID: nil)
+                let mutation = LayoutEngine.mutation(for: intent, stackNodeID: parentNode?.id)
                 print("[LiveUI] canvas: applying \(mutation)")
                 state.apply(mutation)
             }
@@ -260,6 +270,16 @@ struct OverlayView: View {
     private func currentEdgePadding(of node: IndexedNode, edge: String) -> Int? {
         guard let call = SwiftSyntaxEngine.findEdgePaddingCall(edge: edge, startingFrom: node.callExpression),
               let arg = SwiftSyntaxEngine.argument(in: call, label: nil, index: 1) else {
+            return nil
+        }
+        return Int(arg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Reads a VStack/HStack's current `spacing:` argument, so
+    /// `LayoutEngine`'s spacing path can compute `old + delta` instead of
+    /// guessing a value out of thin air.
+    private func currentSpacing(of stackNode: IndexedNode) -> Int? {
+        guard let arg = SwiftSyntaxEngine.argument(in: stackNode.callExpression, label: "spacing", index: 0) else {
             return nil
         }
         return Int(arg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines))

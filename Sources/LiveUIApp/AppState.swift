@@ -233,4 +233,33 @@ public final class AppState: ObservableObject {
             collect(parsed, in: node.children, exact: &exact, typeMatches: &typeMatches)
         }
     }
+
+    /// The immediate enclosing view call for `childID`, if any — e.g. the
+    /// `VStack` `IndexedNode` for a `Button` nested directly inside it.
+    ///
+    /// This is what lets a canvas drag take `LayoutEngine`'s "grow the
+    /// VStack's spacing" path instead of always falling back to padding
+    /// the dragged view itself: without a parent, every drag — on a
+    /// Button, a Text, or the VStack itself — can only pad its own target,
+    /// which both moves the target *and* visibly changes the gap to its
+    /// sibling, in a way that doesn't read as "the view moved to where I
+    /// dragged it."
+    public func parent(of childID: ViewNodeID) -> IndexedNode? {
+        for index in fileIndexes.values {
+            if let found = parent(of: childID, in: index.roots, parent: nil) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func parent(of childID: ViewNodeID, in nodes: [IndexedNode], parent: IndexedNode?) -> IndexedNode? {
+        for node in nodes {
+            if node.id == childID { return parent }
+            if let found = self.parent(of: childID, in: node.children, parent: node) {
+                return found
+            }
+        }
+        return nil
+    }
 }

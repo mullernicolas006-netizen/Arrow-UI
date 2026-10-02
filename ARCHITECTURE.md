@@ -100,15 +100,30 @@ What this deliberately does *not* do yet:
   mutation bug. `OverlayView` now hit-tests the mouse position on every
   `.onContinuousHover` tick (suppressed mid-drag) and only draws a box for
   the view that's hovered, selected, or actively being dragged.
-- **Canvas drags don't know their parent yet.** `LayoutEngine.mutation`
-  can produce the "grow the VStack's spacing" mutation, but only when
-  given a `parentType`/`stackNodeID` — and `OverlayView`'s drag gesture
-  currently passes `nil` for both, because `RuntimeViewInfo.parentID`
-  isn't populated by today's manual `.liveUITag(...)` call sites. So
-  every canvas drag takes the generic padding fallback. The Inspector's
-  spacing stepper already proves the smarter VStack-spacing path works
-  end to end; wiring `parentID` through is what's needed to get the same
-  smarts from a canvas drag.
+- **Canvas drags now know their parent.** `AppState.parent(of:)` walks the
+  *indexed source tree* (not the runtime's `parentID`, which still isn't
+  populated by today's manual `.liveUITag(...)` call sites — this didn't
+  need it) to find the `IndexedNode` directly enclosing the dragged view,
+  and `OverlayView`'s drag gesture now passes that through as
+  `parentType`/`stackNodeID` instead of always `nil`. A vertical drag on a
+  view sitting directly inside a `VStack` now takes `LayoutEngine`'s
+  "grow the stack's spacing" path instead of the generic padding fallback
+  (same for `HStack`/horizontal).
+  This was the real cause of a drag "moving the wrong thing": padding the
+  dragged child directly (the old fallback, always taken) *also* visibly
+  changes the gap to its sibling as a side effect, which reads exactly
+  like "dragging the button changed something about the text" even
+  though only the button's own modifier chain was touched. Known
+  remaining imprecision in this heuristic (not fixed by this change,
+  inherent to "change one spacing number" rather than pixel-position
+  dragging): with more than two children in the stack, `spacing` applies
+  uniformly between *every* adjacent pair, so dragging the *first* child
+  down moves its later siblings (spacing is measured from it) rather than
+  moving the first child itself, since VStack always top-anchors its
+  first child. Dragging the *last* child (the common case) behaves
+  correctly. A drag on a view with no stack parent (the VStack itself, or
+  any view directly inside a `ZStack`) still uses the padding fallback —
+  there's no sibling spacing to grow in that case.
 
 ## Automatic rebuild + relaunch
 
