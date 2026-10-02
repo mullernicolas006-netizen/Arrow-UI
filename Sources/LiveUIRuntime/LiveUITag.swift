@@ -28,13 +28,21 @@ public struct LiveUITagModifier: ViewModifier {
     @EnvironmentObject private var previewStore: LiveUIPreviewStore
 
     public func body(content: Content) -> some View {
+        let liveOffset = previewStore.offsets[id] ?? .zero
         content
             // Applied to `content` *before* the geometry reader below, so
             // the reported geometry also reflects the live nudge — the
             // desktop app's own selection box and hit-testing stay in
             // sync with the view while it's being dragged, not just the
             // view itself.
-            .offset(previewStore.offsets[id] ?? .zero)
+            .offset(liveOffset)
+            // A short *linear* glide, not a spring: it exists only to
+            // paper over small, irregular gaps between network ticks (a
+            // message arriving a few extra ms late shouldn't read as a
+            // visible jump), not to add a catch-up lag behind the
+            // cursor — a spring or anything longer would feel laggier
+            // than a plain drag, the opposite of what's wanted here.
+            .animation(.linear(duration: 0.05), value: liveOffset)
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(

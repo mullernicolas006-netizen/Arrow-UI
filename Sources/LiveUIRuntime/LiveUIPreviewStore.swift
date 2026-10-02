@@ -4,7 +4,7 @@ import LiveUIModels
 
 /// Live drag-preview state, shared by every `.liveUITag`'d view in the
 /// running app (§25). While a canvas drag is in flight on the desktop
-/// side, `OverlayView` streams `BridgeMessage.previewMutation` over the
+/// side, `OverlayView` streams `BridgeMessage.previewOffset` over the
 /// existing bridge connection, and this store is what lets the *actual*
 /// dragged view move in real time — not a screenshot, not a desktop-side
 /// approximation, before any source mutation or rebuild happens.
@@ -25,14 +25,10 @@ public final class LiveUIPreviewStore: ObservableObject {
 
     public func apply(_ message: BridgeMessage) {
         switch message {
-        case .previewMutation(let nodeID, let property, let value):
-            var size = offsets[nodeID] ?? .zero
-            switch property {
-            case "offsetX": size.width = value
-            case "offsetY": size.height = value
-            default: return
-            }
-            offsets[nodeID] = size
+        case .previewOffset(let nodeID, let x, let y):
+            // One atomic write — both axes change together, in the same
+            // render, instead of x and y each triggering their own.
+            offsets[nodeID] = CGSize(width: x, height: y)
         case .clearPreview:
             offsets.removeAll()
         case .requestSnapshot:

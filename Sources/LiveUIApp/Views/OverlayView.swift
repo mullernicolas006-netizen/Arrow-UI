@@ -159,13 +159,13 @@ struct OverlayView: View {
     ///
     /// While the drag is *in flight*, every `.onChanged` tick also streams
     /// a live preview straight to the running app over the existing
-    /// bridge connection (`BridgeMessage.previewMutation`, §25) — the
+    /// bridge connection (`BridgeMessage.previewOffset`, §25) — the
     /// *actual* button/text in the Simulator moves in real time, not a
     /// screenshot crop and not just the desktop-side outline box. See
     /// `LiveUIPreviewStore` on the runtime side for how that's applied.
     /// This needs a connected runtime to do anything visible; with none
-    /// connected it's a harmless no-op and the outline/content-crop
-    /// preview are all you see, same as before.
+    /// connected it's a harmless no-op and the outline box is all you see,
+    /// same as before.
     ///
     /// Writes `.offset(x:, y:)` on the dragged view itself once the drag
     /// ends — an explicit product decision (see ARCHITECTURE.md): earlier
@@ -203,8 +203,12 @@ struct OverlayView: View {
                 if let hitID = dragStartRuntimeID, transform.scale > 0 {
                     let deltaX = value.translation.width / transform.scale
                     let deltaY = value.translation.height / transform.scale
-                    state.sendPreview(.previewMutation(nodeID: hitID, property: "offsetX", value: deltaX))
-                    state.sendPreview(.previewMutation(nodeID: hitID, property: "offsetY", value: deltaY))
+                    // One message per tick, both axes together — two
+                    // separate messages meant two separate `@Published`
+                    // updates (and renders) on the runtime side per tick,
+                    // which looked like the view taking two small steps
+                    // instead of one smooth one.
+                    state.sendPreview(.previewOffset(nodeID: hitID, x: deltaX, y: deltaY))
                 }
             }
             .onEnded { value in

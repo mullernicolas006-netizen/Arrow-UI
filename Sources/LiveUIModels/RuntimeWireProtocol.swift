@@ -56,8 +56,13 @@ public enum RuntimeMessage: Codable, Sendable {
 /// App (desktop) -> Runtime (app) messages.
 public enum BridgeMessage: Codable, Sendable {
     case requestSnapshot
-    /// An in-flight drag/resize preview (§25): applied transiently in the
-    /// runtime, never written to source until the gesture ends.
-    case previewMutation(nodeID: String, property: String, value: Double)
+    /// An in-flight drag preview (§25): applied transiently in the
+    /// runtime, never written to source until the gesture ends. `x`/`y`
+    /// are sent together, atomically, in one message — splitting them
+    /// into two separate messages (as an earlier revision of this case
+    /// did) meant the runtime applied two separate `@Published` updates,
+    /// and therefore two separate renders, per drag tick, which was
+    /// visibly less smooth than a single combined update.
+    case previewOffset(nodeID: String, x: Double, y: Double)
     case clearPreview
 }

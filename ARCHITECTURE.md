@@ -82,20 +82,33 @@ What this deliberately does *not* do yet:
   was deliberately *not* used for this first pass so the core
   click/drag-to-mutate loop has zero risky/private-API dependencies.
 - **The real view moves live during a drag, via the bridge — not touch
-  injection.** `RuntimeWireProtocol.BridgeMessage` already had
-  `.previewMutation(nodeID:property:value:)`/`.clearPreview` cases from
-  early on (§25), but nothing sent or received them until now. Every
-  `OverlayView` drag's `.onChanged` tick streams the live delta (device
-  points, same math as the final mutation) to the connected runtime via
-  `AppState.sendPreview` -> `BridgeServer.broadcast`. On the runtime side,
-  `LiveUIEditModeRoot` owns a `LiveUIPreviewStore` (an `ObservableObject`
-  keyed by the same `.liveUITag` id strings), injects it via
-  `.environmentObject`, and feeds it from `BridgeClient.onMessage`.
-  `LiveUITagModifier` reads `previewStore.offsets[id]` and applies it as
-  an `.offset()` on `content` *before* its own geometry-reporting
-  `GeometryReader`, so the reported geometry — and therefore the
-  desktop-side selection box and hit-testing — also stays in sync with
-  the view while it's moving.
+  injection.** `RuntimeWireProtocol.BridgeMessage` already had cases
+  reserved for exactly this from early on (§25), but nothing sent or
+  received them until now. Every `OverlayView` drag's `.onChanged` tick
+  streams the live delta (device points, same math as the final
+  mutation) to the connected runtime as one atomic
+  `.previewOffset(nodeID:x:y:)` message, via `AppState.sendPreview` ->
+  `BridgeServer.broadcast`. Both axes travel together in a single message
+  deliberately — an earlier revision sent them as two separate messages
+  (a `property: String`-tagged case, one for `"offsetX"`, one for
+  `"offsetY"`), which meant the runtime applied two separate `@Published`
+  updates — and therefore two separate renders — per drag tick, visibly
+  less smooth than one combined update.
+
+  On the runtime side, `LiveUIEditModeRoot` owns a `LiveUIPreviewStore`
+  (an `ObservableObject` keyed by the same `.liveUITag` id strings),
+  injects it via `.environmentObject`, and feeds it from
+  `BridgeClient.onMessage`. `LiveUITagModifier` reads
+  `previewStore.offsets[id]` and applies it as an `.offset()` on
+  `content` *before* its own geometry-reporting `GeometryReader`, so the
+  reported geometry — and therefore the desktop-side selection box and
+  hit-testing — also stays in sync with the view while it's moving. That
+  offset also carries a short (`0.05`s) *linear* `.animation` — not a
+  spring — purely to paper over small, irregular gaps between network
+  ticks (a message arriving a few ms late reads as a glide, not a jump);
+  anything longer, or any easing with overshoot/settle, would add a
+  catch-up lag behind the cursor, which is the opposite of the "exact
+  1:1 tracking" feel this is for.
 
   This only ever holds the *delta* of whichever drag is in flight, not a
   view's total offset: a previous drag's rebuild already baked its own
