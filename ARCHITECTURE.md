@@ -100,47 +100,35 @@ What this deliberately does *not* do yet:
   mutation bug. `OverlayView` now hit-tests the mouse position on every
   `.onContinuousHover` tick (suppressed mid-drag) and only draws a box for
   the view that's hovered, selected, or actively being dragged.
-- **Canvas drags now know their parent.** `AppState.parent(of:)` walks the
-  *indexed source tree* (not the runtime's `parentID`, which still isn't
-  populated by today's manual `.liveUITag(...)` call sites — this didn't
-  need it) to find the `IndexedNode` directly enclosing the dragged view,
-  and `OverlayView`'s drag gesture now passes that through as
-  `parentType`/`stackNodeID` instead of always `nil`. A vertical drag on a
-  view sitting directly inside a `VStack` now takes `LayoutEngine`'s
-  "grow the stack's spacing" path instead of the generic padding fallback
-  (same for `HStack`/horizontal).
-  This was the real cause of a drag "moving the wrong thing": padding the
-  dragged child directly (the old fallback, always taken) *also* visibly
-  changes the gap to its sibling as a side effect, which reads exactly
-  like "dragging the button changed something about the text" even
-  though only the button's own modifier chain was touched.
-
-  The spacing path is only taken when the stack has **exactly two
-  children** (`OverlayView`'s `spacingIsUnambiguous` check). `spacing` is
-  one shared number for *every* adjacent gap in a stack — with 3+
-  children, growing it to move the dragged view also pushes every later
-  sibling down (or right), which is exactly the "dragging this button
-  also moved the other button" bug reported in real testing. With exactly
-  two children there's only one gap, so it's unambiguous; with more, the
-  drag falls back to padding just the dragged view, which never touches a
-  sibling. A drag on a view with no stack parent at all (the VStack
-  itself, or any view directly inside a `ZStack`) also uses the padding
-  fallback.
-
-  **Open product question, not yet resolved:** even the padding fallback
-  and the two-child spacing path only ever land a drag *approximately*
-  where the cursor was released, by construction — they write a semantic
-  layout property (a spacing or padding number), not an absolute
-  position, which is the whole point of this tool per the original spec
-  (§5-6: never a raw `.offset()`/pixel hack). Real user testing keeps
-  running into this as "it doesn't land exactly where I dragged it," which
-  is the expected result of that design choice, not a bug to be patched
-  away incrementally. The real fork: keep semantic-only mutations (accept
-  approximate landing as the cost of minimal, meaningful diffs) vs. add an
-  explicit opt-in escape hatch that writes `.offset(x:y:)`/`.position()`
-  when the user wants exact pixel placement badly enough to accept a less
-  meaningful diff. Needs a decision before more precision work here is
-  worth doing.
+- **Canvas drags write `.offset(x:, y:)`, not a semantic layout
+  property.** Earlier iterations tried approximating a drag with VStack
+  `spacing` (only unambiguous with exactly two children) and, before
+  that, edge-specific `padding` — both are documented above in git
+  history and in the superseded revisions of this file, and both were
+  real attempts at the spec's original "never a raw pixel hack" §5-6
+  philosophy. In practice, real user testing kept hitting the same
+  complaint regardless of which one was active: a drag never lands
+  *exactly* where the cursor is released (both write a shared layout
+  number, not a position), and worse, changing that shared number can
+  visibly move a sibling that was never touched — "dragging this button
+  also moved the other button," reported independently of which
+  heuristic was in place at the time. Given that choice explicitly (see
+  this feature's commit history), the product settled on precise
+  positioning over semantic-minimal diffs: `LayoutEngine.offsetMutation`
+  always writes/updates `.offset(x:, y:)` on the dragged view itself.
+  `.offset` is a pure rendering displacement — SwiftUI never runs it
+  through the parent's layout pass, so it literally cannot resize a stack
+  or reposition a sibling, and the view moves by exactly the delta
+  computed from the drag. `OverlayView`'s drag gesture now also applies
+  both axes of a diagonal drag independently (each as its own mutation,
+  re-resolving the node in between) instead of picking one dominant axis
+  and dropping the other, which was itself a contributor to "doesn't land
+  where I dropped it." `LayoutEngine.mutation(for:stackNodeID:)` (the
+  spacing/padding decision table) is left in place and still covered by
+  its own tests — the Inspector's spacing stepper still edits `spacing`
+  directly as an explicit, typed edit, which is a different action from
+  a drag and isn't affected by this change — but nothing in the canvas
+  drag path calls it anymore.
 
 ## Automatic rebuild + relaunch
 

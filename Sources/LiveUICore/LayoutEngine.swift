@@ -105,4 +105,48 @@ public enum LayoutEngine {
             newValue: .integer(new)
         )
     }
+
+    /// Exact-position dragging: an explicit alternative to `mutation(for:
+    /// stackNodeID:)` above, used when the product wants a drag to land
+    /// precisely where the cursor was released rather than approximate a
+    /// semantic layout property. Real user testing of the spacing/padding
+    /// approach kept surfacing as "it doesn't land exactly where I dragged
+    /// it, and sometimes nudges a sibling too" — both true by construction
+    /// of that approach, not bugs in it. `.offset(x:, y:)` is a pure
+    /// rendering displacement: it never participates in the parent's
+    /// layout pass, so it can never resize a stack or push a sibling, and
+    /// the view moves by exactly the delta given.
+    ///
+    /// Accumulates into a single `.offset(x:, y:)` modifier on the dragged
+    /// view across repeated drags (reads the existing value back via
+    /// `currentOffset` rather than stacking a new modifier each time),
+    /// exactly like the padding fallback above did for the same reason:
+    /// two separate offset calls would apply additively and the view
+    /// would drift from where it was actually dropped.
+    public static func offsetMutation(target: ViewNodeID, currentOffset: (x: Int, y: Int)?, axis: DragIntent.Axis, delta: Double) -> Mutation {
+        let roundedDelta = Int(delta.rounded())
+        let oldX = currentOffset?.x ?? 0
+        let oldY = currentOffset?.y ?? 0
+        let newX = axis == .horizontal ? oldX + roundedDelta : oldX
+        let newY = axis == .vertical ? oldY + roundedDelta : oldY
+
+        guard currentOffset != nil else {
+            return .addModifier(
+                target: target,
+                modifierName: "offset",
+                arguments: [
+                    MutationArgument(label: "x", value: .integer(newX)),
+                    MutationArgument(label: "y", value: .integer(newY))
+                ]
+            )
+        }
+        return .modifyModifierArgument(
+            target: target,
+            modifierName: "offset",
+            argumentLabel: axis == .horizontal ? "x" : "y",
+            argumentIndex: axis == .horizontal ? 0 : 1,
+            oldValue: .integer(axis == .horizontal ? oldX : oldY),
+            newValue: .integer(axis == .horizontal ? newX : newY)
+        )
+    }
 }

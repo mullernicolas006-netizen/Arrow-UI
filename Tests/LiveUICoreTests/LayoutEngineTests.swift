@@ -79,6 +79,61 @@ final class LayoutEngineTests: XCTestCase {
         XCTAssertEqual(new, .integer(87))
     }
 
+    /// Exact-position dragging (the product's eventual choice over the
+    /// spacing/padding heuristics above): a vertical drag with no prior
+    /// offset must add a fresh `.offset(x: 0, y: <delta>)`, never touch
+    /// anything else, and never affect a sibling (unlike spacing/padding,
+    /// `.offset` doesn't participate in the parent's layout pass at all).
+    func testFirstOffsetDragAddsModifierWithOnlyTheDraggedAxisSet() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let mutation = LayoutEngine.offsetMutation(target: target, currentOffset: nil, axis: .vertical, delta: 34)
+
+        guard case .addModifier(_, let name, let args) = mutation else {
+            return XCTFail("expected a fresh .offset(x:,y:) modifier")
+        }
+        XCTAssertEqual(name, "offset")
+        XCTAssertEqual(args.count, 2)
+        XCTAssertEqual(args[0].label, "x")
+        XCTAssertEqual(args[0].value, .integer(0))
+        XCTAssertEqual(args[1].label, "y")
+        XCTAssertEqual(args[1].value, .integer(34))
+    }
+
+    /// A second drag along the same axis must update the *existing*
+    /// `.offset` modifier's matching component (accumulating onto the old
+    /// value), not stack a second `.offset` call — two additive offsets
+    /// would make the view drift from wherever it was actually dropped,
+    /// exactly the bug the padding fallback had to guard against earlier.
+    func testRepeatedOffsetDragUpdatesExistingModifierOnMatchingAxis() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let mutation = LayoutEngine.offsetMutation(target: target, currentOffset: (x: 0, y: 34), axis: .vertical, delta: 12)
+
+        guard case .modifyModifierArgument(_, let name, let label, let index, let old, let new) = mutation else {
+            return XCTFail("expected an update to the existing .offset modifier")
+        }
+        XCTAssertEqual(name, "offset")
+        XCTAssertEqual(label, "y")
+        XCTAssertEqual(index, 1)
+        XCTAssertEqual(old, .integer(34))
+        XCTAssertEqual(new, .integer(46))
+    }
+
+    /// Dragging horizontally after a prior vertical drag must update only
+    /// the `x` component and leave the accumulated `y` value alone.
+    func testHorizontalOffsetDragAfterVerticalDragOnlyTouchesX() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let mutation = LayoutEngine.offsetMutation(target: target, currentOffset: (x: 0, y: 34), axis: .horizontal, delta: 9)
+
+        guard case .modifyModifierArgument(_, let name, let label, let index, let old, let new) = mutation else {
+            return XCTFail("expected an update to the existing .offset modifier")
+        }
+        XCTAssertEqual(name, "offset")
+        XCTAssertEqual(label, "x")
+        XCTAssertEqual(index, 0)
+        XCTAssertEqual(old, .integer(0))
+        XCTAssertEqual(new, .integer(9))
+    }
+
     func testSpacingNeverGoesNegative() {
         let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Text")
         let stackID = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0]), typeName: "VStack")

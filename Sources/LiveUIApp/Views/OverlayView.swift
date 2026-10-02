@@ -156,16 +156,22 @@ struct OverlayView: View {
     /// §21-26, transactional per §26: only the box being dragged previews
     /// the movement (via `dragTranslation`), and nothing is written to
     /// source until the gesture ends, at which point the raw drag is
-    /// translated into a semantic `Mutation` via `LayoutEngine`.
+    /// translated into a `Mutation` via `LayoutEngine.offsetMutation`.
     ///
-    /// `parentType`/`stackNodeID` are resolved from the *indexed source
-    /// tree* via `AppState.parent(of:)`, not from the runtime (today's
-    /// manual `.liveUITag` call sites still don't populate
-    /// `RuntimeViewInfo.parentID` — this path doesn't need them to). A
-    /// drag on a view sitting directly inside a `VStack`/`HStack`, along
-    /// that stack's own axis, takes LayoutEngine's "grow the stack's
-    /// spacing" path; anything else (no stack parent, or a cross-axis
-    /// drag) falls back to padding the dragged view itself.
+    /// Writes `.offset(x:, y:)` on the dragged view itself — an explicit
+    /// product decision (see ARCHITECTURE.md): earlier versions tried to
+    /// approximate a drag with a semantic layout property (VStack
+    /// `spacing`, then edge-specific `padding`), but that never lands
+    /// exactly where the cursor was released and, worse, can visibly
+    /// nudge a sibling as a side effect of changing a *shared* layout
+    /// number. `.offset` is a pure rendering displacement — it never
+    /// participates in the parent's layout pass, so it can't resize a
+    /// stack or move anything else, and the view moves by exactly the
+    /// delta given.
+    ///
+    /// Unlike the old single-axis approach, both components of the drag
+    /// are applied — a diagonal drag no longer silently drops whichever
+    /// axis moved less.
     private func dragGesture(transform: CanvasTransform) -> some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .local)
             .onChanged { value in
@@ -197,51 +203,38 @@ struct OverlayView: View {
                     print("[LiveUI] canvas: drag ended with no active hit — nothing to do")
                     return
                 }
-                guard let node = state.node(forRuntimeID: hitID) else {
-                    print("[LiveUI] canvas: drag ended but '\(hitID)' no longer resolves")
+                guard transform.scale > 0 else {
+                    print("[LiveUI] canvas: bad scale — no mutation")
                     return
                 }
 
-                let axis: DragIntent.Axis = abs(value.translation.width) > abs(value.translation.height) ? .horizontal : .vertical
-                let rawDelta = axis == .horizontal ? value.translation.width : value.translation.height
-                print("[LiveUI] canvas: drag ended on \(node.id), translation=\(value.translation), axis=\(axis), rawDelta=\(rawDelta)")
-                guard abs(rawDelta) >= 1, transform.scale > 0 else {
-                    print("[LiveUI] canvas: delta too small or bad scale — no mutation")
-                    return
+                let deltaX = value.translation.width / transform.scale
+                let deltaY = value.translation.height / transform.scale
+                print("[LiveUI] canvas: drag ended on \(hitID), translation=\(value.translation) -> device delta=(\(deltaX), \(deltaY))")
+
+                // Both axes are applied independently (each as its own
+                // mutation, re-resolving the node in between so the second
+                // one sees the first one's on-disk result) — a diagonal
+                // drag must move the view diagonally, not just along
+                // whichever axis happened to be larger.
+                if abs(deltaX) >= 1 {
+                    applyOffset(hitID: hitID, axis: .horizontal, delta: deltaX)
                 }
-
-                // If the dragged view sits directly inside a VStack/HStack
-                // whose own axis matches the drag, LayoutEngine takes the
-                // "grow the stack's spacing" path instead of padding the
-                // dragged view itself — see `parent(of:)`'s doc comment for
-                // why that's the fix for drags that looked like they
-                // changed the wrong thing.
-                //
-                // Only safe with *exactly* two children: `spacing` is one
-                // shared number for every adjacent gap in the stack, so
-                // growing it with 3+ children also pushes every later
-                // sibling down (or right), not just the dragged view —
-                // which is indistinguishable from "dragging this button
-                // also moved the other button." With only two children
-                // there's exactly one gap, so it's unambiguous. With more,
-                // fall back to padding just the dragged view, which never
-                // touches a sibling.
-                let parentNode = state.parent(of: node.id)
-                let spacingIsUnambiguous = parentNode?.children.count == 2
-                print("[LiveUI] canvas: parent of \(node.id) is \(parentNode?.id.description ?? "none"), children=\(parentNode?.children.count ?? 0), spacingPath=\(spacingIsUnambiguous)")
-
-                let intent = DragIntent(
-                    target: node.id,
-                    parentType: spacingIsUnambiguous ? parentNode?.id.typeName : nil,
-                    axis: axis,
-                    deltaPoints: rawDelta / transform.scale,
-                    currentSpacingValue: spacingIsUnambiguous ? parentNode.flatMap { currentSpacing(of: $0) } : nil,
-                    currentPaddingValue: currentEdgePadding(of: node, edge: LayoutEngine.edgeName(for: axis))
-                )
-                let mutation = LayoutEngine.mutation(for: intent, stackNodeID: spacingIsUnambiguous ? parentNode?.id : nil)
-                print("[LiveUI] canvas: applying \(mutation)")
-                state.apply(mutation)
+                if abs(deltaY) >= 1 {
+                    applyOffset(hitID: hitID, axis: .vertical, delta: deltaY)
+                }
             }
+    }
+
+    private func applyOffset(hitID: String, axis: DragIntent.Axis, delta: Double) {
+        guard let node = state.node(forRuntimeID: hitID) else {
+            print("[LiveUI] canvas: drag ended but '\(hitID)' no longer resolves")
+            return
+        }
+        let offset = currentOffset(of: node)
+        let mutation = LayoutEngine.offsetMutation(target: node.id, currentOffset: offset, axis: axis, delta: delta)
+        print("[LiveUI] canvas: applying \(mutation)")
+        state.apply(mutation)
     }
 
     /// A parent container's box always encloses its children's boxes —
@@ -264,35 +257,20 @@ struct OverlayView: View {
         return best?.id
     }
 
-    /// Reads back the value of an existing `.padding(<edge>, N)` modifier
-    /// on `node` for the given edge, searching the *entire* modifier
-    /// chain — not just the outermost link.
-    ///
-    /// An earlier version only checked the outermost modifier, which
-    /// broke as soon as drags alternated axes: dragging vertically then
-    /// horizontally pushes the `.top` modifier out of "outermost" (the
-    /// new `.leading` one takes that spot), so a *third*, vertical drag
-    /// could no longer find its own earlier `.top` call and added a
-    /// second one instead — both then applied additively, which is why a
-    /// drag's landing position could drift far from where the cursor was
-    /// released. `SwiftSyntaxEngine.findEdgePaddingCall` walks the whole
-    /// chain instead, so it finds the right modifier regardless of how
-    /// many other-edge modifiers were added after it.
-    private func currentEdgePadding(of node: IndexedNode, edge: String) -> Int? {
-        guard let call = SwiftSyntaxEngine.findEdgePaddingCall(edge: edge, startingFrom: node.callExpression),
-              let arg = SwiftSyntaxEngine.argument(in: call, label: nil, index: 1) else {
+    /// Reads back an existing `.offset(x:, y:)` modifier on `node`, if any
+    /// — searching the *entire* modifier chain, not just the outermost
+    /// link, since earlier modifiers (like this one, once added) can be
+    /// pushed inward by whatever gets appended after them. Lets
+    /// `LayoutEngine.offsetMutation` accumulate onto the existing value
+    /// instead of stacking a second `.offset` call on every drag.
+    private func currentOffset(of node: IndexedNode) -> (x: Int, y: Int)? {
+        guard let call = SwiftSyntaxEngine.findModifierCall(named: "offset", startingFrom: node.callExpression),
+              let xArg = SwiftSyntaxEngine.argument(in: call, label: "x", index: 0),
+              let yArg = SwiftSyntaxEngine.argument(in: call, label: "y", index: 1),
+              let x = Int(xArg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let y = Int(yArg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
-        return Int(arg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    /// Reads a VStack/HStack's current `spacing:` argument, so
-    /// `LayoutEngine`'s spacing path can compute `old + delta` instead of
-    /// guessing a value out of thin air.
-    private func currentSpacing(of stackNode: IndexedNode) -> Int? {
-        guard let arg = SwiftSyntaxEngine.argument(in: stackNode.callExpression, label: "spacing", index: 0) else {
-            return nil
-        }
-        return Int(arg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines))
+        return (x, y)
     }
 }
