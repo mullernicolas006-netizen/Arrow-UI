@@ -111,23 +111,32 @@ What this deliberately does *not* do yet:
   since otherwise the real app would be left visibly nudged by an amount
   nothing on disk accounts for. With no runtime connected, every
   `sendPreview` call is a harmless no-op (`BridgeServer.broadcast` to
-  zero connections) — the outline box and the screenshot-crop preview
-  below are all you see in that case, same as before this existed.
-- **The drag preview also carries real content as a screenshot crop, as
-  a zero-latency complement to the above.**
-  `OverlayView.draggedContentPreview` re-renders the *same already-loaded*
-  mirror image, shifted so the dragged view's own region lands at the
-  origin of a `size`-constrained, clipped frame — a "window into a larger
-  image" with no pixel copying, automatically aligned with
-  `CanvasTransform` since it reuses the exact `origin`/`size` math the
-  selection box itself uses. This is still built from the last polled
-  screenshot (see "still-image poll" above), so on its own it's the
-  view's last-known appearance moving with the cursor, not a true
-  re-render — but combined with the real live-offset mechanism above, the
-  mirror's own next poll tick (≤0.5s later) will *also* show the real,
-  now-moved view, since the actual app is really rendering it there.
-  Drawn before the selection-outline `ForEach` in the `ZStack` so the
-  outline still shows as a border on top of it rather than being covered.
+  zero connections) — only the outline box is visible in that case.
+
+  **A screenshot-crop "ghost" preview existed briefly in between** (an
+  earlier commit, superseded by the above) and was removed again: it
+  re-rendered a cropped piece of the last polled mirror image to follow
+  the cursor, as a stopgap before real live movement existed. In real
+  testing it looked actively broken once combined with the real
+  mechanism above — a small, wrongly-cropped box with overlapping/
+  duplicated text, fighting the real view rather than complementing it —
+  so it's gone; `OverlayView` no longer has a `draggedContentPreview`
+  function or an `import AppKit`. If live movement alone ever turns out
+  too sparse on its own (e.g. a very slow bridge connection), revisit
+  with a cleaner design rather than re-adding this one as-is.
+
+  **Caveat worth knowing when this doesn't *look* like it's working:**
+  the running Simulator app has to actually be rebuilt against the
+  updated `LiveUIRuntime` source before any of this takes effect — unlike
+  `LiveUIApp` itself (`swift build`/`swift run` picks up source changes
+  immediately), the Simulator app is a *separate*, already-compiled
+  binary that only picks up `LiveUIRuntime` changes on its next build.
+  `PlaygroundBuildRunner`'s existing auto-rebuild (triggered by the next
+  drag that writes a mutation) does this via a normal local-path SwiftPM
+  resolution, so no special cache-reset step is needed — but a
+  *currently-running* app process, launched before a `LiveUIRuntime`
+  change landed, is still running the old code until that next rebuild
+  completes.
 - **No input is forwarded into the Simulator.** Selection and dragging
   happen entirely on LiveUI's own canvas, hit-tested against
   `RuntimeGeometry` LiveUI already collects — the running app never

@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 import SwiftSyntax
 import LiveUICore
 import LiveUIModels
@@ -46,13 +45,6 @@ struct OverlayView: View {
                             .allowsHitTesting(false)
                     }
 
-                    if let hitID = dragStartRuntimeID, let geometry = state.runtimeGeometry[hitID], let image = mirror.frame {
-                        draggedContentPreview(image: image, geometry: geometry, transform: transform, canvasSize: proxy.size)
-                    }
-
-                    // Drawn after the content preview so the selection
-                    // outline stays visible as a border around it, instead
-                    // of being covered by it.
                     ForEach(Array(state.runtimeGeometry.keys.sorted()), id: \.self) { id in
                         if let geometry = state.runtimeGeometry[id] {
                             boxView(id: id, geometry: geometry, transform: transform)
@@ -159,42 +151,6 @@ struct OverlayView: View {
                 // fighting per-box gestures.
                 .allowsHitTesting(false)
         }
-    }
-
-    /// While dragging, shows a floating "cutout" of the real mirrored
-    /// pixels for the dragged view, following the cursor — not just an
-    /// empty outline. The mirror itself is still only a polled screenshot
-    /// (ARCHITECTURE.md's known limitation; it doesn't repaint mid-drag),
-    /// so this is necessarily the view's last-known appearance rather
-    /// than a true live re-render, but it's a real content preview, not a
-    /// blank box: you see the actual button/text moving, and only the
-    /// final rebuild (after the gesture ends) reflects any layout change
-    /// the move itself causes.
-    ///
-    /// Built by re-rendering the *same already-loaded* mirror image, not
-    /// by copying pixels out of it: shift the whole image so the dragged
-    /// view's own region lands at the origin, constrain to a
-    /// `size`-sized frame, and clip — a standard SwiftUI "window into a
-    /// larger image" trick. That also means it's automatically aligned
-    /// with `CanvasTransform`, since it reuses the exact `origin`/`size`
-    /// math `boxView` uses for the selection outline.
-    private func draggedContentPreview(image: NSImage, geometry: RuntimeGeometry, transform: CanvasTransform, canvasSize: CGSize) -> some View {
-        let origin = transform.point(CGPoint(x: geometry.x, y: geometry.y))
-        let size = transform.size(CGSize(width: geometry.width, height: geometry.height))
-
-        return Image(nsImage: image)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .frame(width: canvasSize.width, height: canvasSize.height)
-            .offset(x: -origin.x, y: -origin.y)
-            .frame(width: max(size.width, 1), height: max(size.height, 1), alignment: .topLeading)
-            .clipped()
-            .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
-            .position(
-                x: origin.x + size.width / 2 + dragTranslation.width,
-                y: origin.y + size.height / 2 + dragTranslation.height
-            )
-            .allowsHitTesting(false)
     }
 
     /// §21-26, transactional per §26: nothing is written to source until
