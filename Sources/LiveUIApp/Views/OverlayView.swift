@@ -26,6 +26,12 @@ struct OverlayView: View {
     /// from "the wrong view moved" and made the canvas look like visual
     /// noise; this is the actual fix for both complaints.
     @State private var hoveredRuntimeID: String?
+    /// Which view (if any) a resize handle is currently being dragged
+    /// for, which corner, and the raw canvas-space translation so far —
+    /// the resize counterpart to `dragStartRuntimeID`/`dragTranslation`.
+    @State private var resizingRuntimeID: String?
+    @State private var resizeHandle: ResizeHandle?
+    @State private var resizeTranslation: CGSize = .zero
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,10 +124,18 @@ struct OverlayView: View {
         let isSelected = state.selection?.description == id
         let isDragging = dragStartRuntimeID == id
         let isHovered = hoveredRuntimeID == id
+        let isResizing = resizingRuntimeID == id
 
         if isSelected || isDragging || isHovered {
             let origin = transform.point(CGPoint(x: geometry.x, y: geometry.y))
             let size = transform.size(CGSize(width: geometry.width, height: geometry.height))
+            // Live-previews a resize locally (zero network latency) by
+            // adjusting the box's own rect per the active handle, before
+            // any mutation/rebuild — the resize counterpart to
+            // `dragTranslation` nudging the box during a move.
+            let rect = isResizing
+                ? resizedRect(origin: origin, size: size, handle: resizeHandle, translation: resizeTranslation)
+                : CGRect(origin: origin, size: size)
 
             // White stroke + .difference blend mode (the same trick Xcode/
             // design tools use for selection outlines): renders black
@@ -129,9 +143,9 @@ struct OverlayView: View {
             // automatically, so it's never invisible regardless of what's
             // under it.
             Rectangle()
-                .strokeBorder(Color.white, lineWidth: isSelected || isDragging ? 2.5 : 1)
-                .frame(width: max(size.width, 1), height: max(size.height, 1))
-                .position(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+                .strokeBorder(Color.white, lineWidth: isSelected || isDragging || isResizing ? 2.5 : 1)
+                .frame(width: max(rect.width, 1), height: max(rect.height, 1))
+                .position(x: rect.midX, y: rect.midY)
                 .offset(isDragging ? dragTranslation : .zero)
                 .blendMode(.difference)
                 .overlay(alignment: .topLeading) {
@@ -150,7 +164,129 @@ struct OverlayView: View {
                 // canvas handles both selection and dragging instead of
                 // fighting per-box gestures.
                 .allowsHitTesting(false)
+
+            // Resize handles only ever show on the *selected* view, not
+            // on hover — unlike the outline itself, which is also shown
+            // on hover so you can see what you're about to click.
+            if isSelected {
+                ForEach(ResizeHandle.allCases, id: \.self) { handle in
+                    resizeHandleView(id: id, handle: handle, rect: rect, transform: transform)
+                }
+            }
         }
+    }
+
+    /// One corner of a selected view's resize affordance. `isLeft`/
+    /// `isTop` say which edges that corner sits on — used both to pick
+    /// the right sign for the size delta and to decide whether dragging
+    /// it should *also* nudge the view's offset (so the opposite corner
+    /// stays anchored in place, the way every other design tool's corner
+    /// handles behave: dragging the top-left handle grows the view
+    /// toward the top-left, it doesn't grow away from it).
+    private enum ResizeHandle: CaseIterable {
+        case topLeft, topRight, bottomLeft, bottomRight
+
+        var isLeft: Bool { self == .topLeft || self == .bottomLeft }
+        var isTop: Bool { self == .topLeft || self == .topRight }
+    }
+
+    /// `rect` adjusted for the in-flight resize translation, purely for
+    /// the local, zero-latency on-canvas preview — the same sign logic
+    /// `resizeGesture`'s `onEnded` uses to build the real mutations.
+    private func resizedRect(origin: CGPoint, size: CGSize, handle: ResizeHandle?, translation: CGSize) -> CGRect {
+        guard let handle else { return CGRect(origin: origin, size: size) }
+        var x = origin.x, y = origin.y, width = size.width, height = size.height
+        if handle.isLeft {
+            x += translation.width
+            width -= translation.width
+        } else {
+            width += translation.width
+        }
+        if handle.isTop {
+            y += translation.height
+            height -= translation.height
+        } else {
+            height += translation.height
+        }
+        return CGRect(x: x, y: y, width: max(width, 1), height: max(height, 1))
+    }
+
+    private func resizeHandleView(id: String, handle: ResizeHandle, rect: CGRect, transform: CanvasTransform) -> some View {
+        let point: CGPoint
+        switch handle {
+        case .topLeft: point = CGPoint(x: rect.minX, y: rect.minY)
+        case .topRight: point = CGPoint(x: rect.maxX, y: rect.minY)
+        case .bottomLeft: point = CGPoint(x: rect.minX, y: rect.maxY)
+        case .bottomRight: point = CGPoint(x: rect.maxX, y: rect.maxY)
+        }
+        return Circle()
+            .fill(Color.white)
+            .overlay(Circle().strokeBorder(Color.black.opacity(0.4), lineWidth: 1))
+            .frame(width: 9, height: 9)
+            .shadow(color: .black.opacity(0.3), radius: 1.5)
+            .position(point)
+            // highPriorityGesture, not gesture: a handle sits right at
+            // the edge of the view it belongs to, so the same touch is
+            // also inside the canvas-wide move-drag gesture's hit area.
+            // Without this, a drag started exactly on a handle could
+            // trigger *both* gestures — a resize and a conflicting move
+            // — instead of just the resize.
+            .highPriorityGesture(resizeGesture(id: id, handle: handle, transform: transform))
+    }
+
+    /// Dragging a corner handle: the two edges meeting at that corner
+    /// move with the cursor, the two opposite edges stay put — exactly
+    /// like `.offsetMutation`, this writes `.frame(width:, height:)` (and,
+    /// for top/left handles, also `.offset(x:, y:)`), never a spacing or
+    /// padding hack, so a resize can never affect a sibling.
+    ///
+    /// Unlike the move-drag gesture, this doesn't yet stream a live
+    /// preview to the running app over the bridge — only the local
+    /// outline previews the resize in flight. Adding that hit a real
+    /// composition problem a move-drag doesn't: a repeated resize's live
+    /// override would need to apply *outside* whatever `.frame()` a
+    /// previous resize's rebuild already compiled in, but `.liveUITag`
+    /// sits *inside* the modifier chain, so a second live-preview resize
+    /// would just get re-constrained by the already-compiled outer
+    /// `.frame()`. Left as a known gap (see ARCHITECTURE.md) rather than
+    /// worked around here.
+    private func resizeGesture(id: String, handle: ResizeHandle, transform: CanvasTransform) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .local)
+            .onChanged { value in
+                resizingRuntimeID = id
+                resizeHandle = handle
+                resizeTranslation = value.translation
+            }
+            .onEnded { value in
+                defer {
+                    resizingRuntimeID = nil
+                    resizeHandle = nil
+                    resizeTranslation = .zero
+                }
+                guard transform.scale > 0 else {
+                    print("[LiveUI] canvas: resize ended — bad scale, no mutation")
+                    return
+                }
+
+                let deltaX = value.translation.width / transform.scale
+                let deltaY = value.translation.height / transform.scale
+                let widthDelta = handle.isLeft ? -deltaX : deltaX
+                let heightDelta = handle.isTop ? -deltaY : deltaY
+                print("[LiveUI] canvas: resize ended on \(id) via \(handle), translation=\(value.translation) -> width delta=\(widthDelta), height delta=\(heightDelta)")
+
+                if abs(widthDelta) >= 1 {
+                    applySize(hitID: id, axis: .horizontal, delta: widthDelta)
+                }
+                if handle.isLeft, abs(deltaX) >= 1 {
+                    applyOffset(hitID: id, axis: .horizontal, delta: deltaX)
+                }
+                if abs(heightDelta) >= 1 {
+                    applySize(hitID: id, axis: .vertical, delta: heightDelta)
+                }
+                if handle.isTop, abs(deltaY) >= 1 {
+                    applyOffset(hitID: id, axis: .vertical, delta: deltaY)
+                }
+            }
     }
 
     /// §21-26, transactional per §26: nothing is written to source until
@@ -273,6 +409,22 @@ struct OverlayView: View {
         state.apply(mutation)
     }
 
+    private func applySize(hitID: String, axis: DragIntent.Axis, delta: Double) {
+        guard let node = state.node(forRuntimeID: hitID) else {
+            print("[LiveUI] canvas: resize ended but '\(hitID)' no longer resolves")
+            return
+        }
+        guard let geometry = state.runtimeGeometry[hitID] else {
+            print("[LiveUI] canvas: resize ended but '\(hitID)' has no known geometry")
+            return
+        }
+        let existingFrame = currentFrame(of: node)
+        let measured = (width: Int(geometry.width.rounded()), height: Int(geometry.height.rounded()))
+        let mutation = LayoutEngine.sizeMutation(target: node.id, existingFrame: existingFrame, measuredSize: measured, axis: axis, delta: delta)
+        print("[LiveUI] canvas: applying \(mutation)")
+        state.apply(mutation)
+    }
+
     /// A parent container's box always encloses its children's boxes —
     /// dragging the Button inside a VStack means the click point is
     /// simultaneously "inside" both the Button's and the VStack's
@@ -308,5 +460,21 @@ struct OverlayView: View {
             return nil
         }
         return (x, y)
+    }
+
+    /// Reads back an existing `.frame(width:, height:)` modifier on
+    /// `node`, if any — same whole-chain search and the same reason as
+    /// `currentOffset`. `nil` means "no explicit frame yet," which
+    /// `LayoutEngine.sizeMutation` treats as "fall back to the view's
+    /// measured size," not as "treat the missing dimension as 0."
+    private func currentFrame(of node: IndexedNode) -> (width: Int, height: Int)? {
+        guard let call = SwiftSyntaxEngine.findModifierCall(named: "frame", startingFrom: node.callExpression),
+              let widthArg = SwiftSyntaxEngine.argument(in: call, label: "width", index: 0),
+              let heightArg = SwiftSyntaxEngine.argument(in: call, label: "height", index: 1),
+              let width = Int(widthArg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let height = Int(heightArg.expression.description.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        return (width, height)
     }
 }

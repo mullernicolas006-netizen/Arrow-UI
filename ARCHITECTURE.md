@@ -160,6 +160,45 @@ What this deliberately does *not* do yet:
   only matter for letting Edit Mode also interact with the live app
   (typing into fields, exercising real button actions) — a distinct,
   later feature.
+- **Resize handles.** A selected view shows 4 corner handles
+  (`OverlayView.ResizeHandle`); dragging one writes/updates a single
+  `.frame(width:, height:)` modifier via `LayoutEngine.sizeMutation`,
+  mirroring how `offsetMutation` works for moves — same merge-not-stack
+  behavior (reads an existing `.frame()` back via `currentFrame(of:)`
+  rather than stacking a second one), same "never a spacing/padding
+  hack, so it can never affect a sibling" property. One real difference
+  from offset: a view with no `.frame()` yet still has a real, measured
+  size (its intrinsic size), so `sizeMutation`'s "no existing frame"
+  branch seeds from the view's current `RuntimeGeometry`, not from 0 —
+  defaulting to 0 like offset does would snap the view to a tiny wrong
+  size on its very first resize.
+
+  Top/left handles also write an `.offset(x:, y:)` alongside the
+  `.frame()` change, so the *opposite* corner stays anchored while
+  resizing — the standard "drag the top-left handle, the view grows
+  toward the top-left" behavior every other design tool has. Each
+  corner can produce up to two mutations (one per axis) plus up to two
+  offset mutations, applied sequentially the same way a diagonal
+  move-drag already does.
+
+  Only the local outline previews a resize in flight — unlike a move,
+  this doesn't yet stream a live preview to the real running view over
+  the bridge. That hits a genuine composition problem a move doesn't: a
+  *second* resize's live override would need to apply *outside*
+  whatever `.frame()` a previous resize's rebuild already compiled in,
+  but `.liveUITag` sits *inside* the modifier chain (it wraps the raw
+  view before any `.frame()`/`.offset()` written after it in source), so
+  a repeat live-preview resize would just get re-constrained by the
+  already-compiled outer `.frame()` and visually do nothing. Left
+  unsolved rather than worked around; the real result still shows up
+  correctly after the gesture ends and the auto-rebuild completes, same
+  as every other mutation.
+
+  Also not yet done: edge (non-corner) handles for resizing one
+  dimension at a time, and handles on a `ZStack`-free-form vs. stack
+  child behaving any differently (there isn't a parent-aware resize
+  heuristic the way `LayoutEngine.mutation`'s spacing path exists for
+  moves — every resize always goes through `sizeMutation`).
 - **Selection outlines are hover/selection-only, not always-on.** Early
   versions drew a box for *every* known view simultaneously. Since a
   parent's box always encloses its children's (a VStack's box always

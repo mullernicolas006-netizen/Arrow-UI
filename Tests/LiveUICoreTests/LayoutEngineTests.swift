@@ -146,4 +146,61 @@ final class LayoutEngineTests: XCTestCase {
         }
         XCTAssertEqual(new, .integer(0))
     }
+
+    /// Resize-handle dragging. A view with no existing `.frame()` still
+    /// has a real, measured size — the first-ever resize must grow from
+    /// that measured baseline, never from 0 (which would snap the view
+    /// to a tiny, wrong size instead of growing from where it already
+    /// visually is).
+    func testFirstResizeGrowsFromMeasuredSizeNotZero() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let mutation = LayoutEngine.sizeMutation(
+            target: target, existingFrame: nil, measuredSize: (width: 80, height: 32),
+            axis: .horizontal, delta: 20
+        )
+
+        guard case .addModifier(_, let name, let args) = mutation else {
+            return XCTFail("expected a fresh .frame(width:,height:) modifier")
+        }
+        XCTAssertEqual(name, "frame")
+        XCTAssertEqual(args.count, 2)
+        XCTAssertEqual(args[0].label, "width")
+        XCTAssertEqual(args[0].value, .integer(100), "must grow from the measured width (80), not 0")
+        XCTAssertEqual(args[1].label, "height")
+        XCTAssertEqual(args[1].value, .integer(32), "the untouched axis must keep its measured value, not reset to 0")
+    }
+
+    /// A second resize must update the *existing* `.frame` modifier's
+    /// matching dimension, not stack a second `.frame` call — same
+    /// merge-not-stack reasoning as the offset/padding mutations above.
+    func testRepeatedResizeUpdatesExistingFrameOnMatchingDimension() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let mutation = LayoutEngine.sizeMutation(
+            target: target, existingFrame: (width: 100, height: 32), measuredSize: (width: 100, height: 32),
+            axis: .vertical, delta: 10
+        )
+
+        guard case .modifyModifierArgument(_, let name, let label, let index, let old, let new) = mutation else {
+            return XCTFail("expected an update to the existing .frame modifier")
+        }
+        XCTAssertEqual(name, "frame")
+        XCTAssertEqual(label, "height")
+        XCTAssertEqual(index, 1)
+        XCTAssertEqual(old, .integer(32))
+        XCTAssertEqual(new, .integer(42))
+    }
+
+    /// Shrinking must never collapse a view to zero or negative size.
+    func testResizeNeverShrinksBelowOnePoint() {
+        let target = ViewNodeID(file: "ContentView.swift", path: StructuralPath([0, 1]), typeName: "Button")
+        let mutation = LayoutEngine.sizeMutation(
+            target: target, existingFrame: (width: 20, height: 32), measuredSize: (width: 20, height: 32),
+            axis: .horizontal, delta: -500
+        )
+
+        guard case .modifyModifierArgument(_, _, _, _, _, let new) = mutation else {
+            return XCTFail("expected an update to the existing .frame modifier")
+        }
+        XCTAssertEqual(new, .integer(1))
+    }
 }

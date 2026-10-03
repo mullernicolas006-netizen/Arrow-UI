@@ -149,4 +149,42 @@ public enum LayoutEngine {
             newValue: .integer(axis == .horizontal ? newX : newY)
         )
     }
+
+    /// Resize-handle dragging: the sizing counterpart to `offsetMutation`,
+    /// builds/updates a single `.frame(width:, height:)` modifier on the
+    /// resized view.
+    ///
+    /// Unlike `offsetMutation`, "no existing `.frame()` yet" does *not*
+    /// mean the missing dimension is 0 — a view with no explicit frame
+    /// still has a real, measured size (its natural/intrinsic size).
+    /// `measuredSize` (the view's current `RuntimeGeometry`) is the
+    /// fallback baseline for whichever dimension isn't already pinned by
+    /// an existing `.frame()` call. Seeding a first-ever resize from 0
+    /// would snap the view to a tiny, wrong size instead of growing from
+    /// where it visually already is.
+    public static func sizeMutation(target: ViewNodeID, existingFrame: (width: Int, height: Int)?, measuredSize: (width: Int, height: Int), axis: DragIntent.Axis, delta: Double) -> Mutation {
+        let roundedDelta = Int(delta.rounded())
+        let baseline = existingFrame ?? measuredSize
+        let newWidth = axis == .horizontal ? max(1, baseline.width + roundedDelta) : baseline.width
+        let newHeight = axis == .vertical ? max(1, baseline.height + roundedDelta) : baseline.height
+
+        guard existingFrame != nil else {
+            return .addModifier(
+                target: target,
+                modifierName: "frame",
+                arguments: [
+                    MutationArgument(label: "width", value: .integer(newWidth)),
+                    MutationArgument(label: "height", value: .integer(newHeight))
+                ]
+            )
+        }
+        return .modifyModifierArgument(
+            target: target,
+            modifierName: "frame",
+            argumentLabel: axis == .horizontal ? "width" : "height",
+            argumentIndex: axis == .horizontal ? 0 : 1,
+            oldValue: .integer(axis == .horizontal ? baseline.width : baseline.height),
+            newValue: .integer(axis == .horizontal ? newWidth : newHeight)
+        )
+    }
 }
