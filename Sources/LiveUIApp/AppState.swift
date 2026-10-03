@@ -13,6 +13,23 @@ public final class AppState: ObservableObject {
     @Published public var projectRoot: URL?
     @Published public var fileIndexes: [String: FileIndex] = [:]
     @Published public var selection: ViewNodeID?
+    /// The runtime-reported id string (e.g. `"VStack@ContentView.swift#2"`,
+    /// matching `RuntimeViewInfo.id`/`state.runtimeGeometry`'s keys) for
+    /// whichever view `selection` currently points at, if any.
+    ///
+    /// This is *not* derivable from `selection.description`: `selection`
+    /// is the full `ViewNodeID` of the *indexed* node — its `file` is an
+    /// absolute path and its `path` is the real, deep structural path
+    /// (e.g. `VStack@/Users/.../ContentView.swift#0.2.0.5.1.0.0...`) —
+    /// while the runtime reports a short, hand-typed id from
+    /// `.liveUITag(id:)` (e.g. `"VStack@ContentView.swift#2"`). Comparing
+    /// `selection?.description` against a runtime id string (as
+    /// `OverlayView.boxView`'s `isSelected` check used to) can never
+    /// match, which was the actual reason resize handles never appeared:
+    /// `isSelected` was always false regardless of what was clicked.
+    /// `OverlayView` sets this directly from the same `hitID` it already
+    /// resolved `selection` from, so it's always correct by construction.
+    @Published public var selectedRuntimeID: String?
     @Published public var runtimeGeometry: [String: RuntimeGeometry] = [:]
     @Published public var isRuntimeConnected: Bool = false
     /// The connected device's logical screen size in points, from the

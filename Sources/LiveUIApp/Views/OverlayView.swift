@@ -126,7 +126,7 @@ struct OverlayView: View {
     /// rectangles and looked like dragging one view moved another one.
     @ViewBuilder
     private func boxView(id: String, geometry: RuntimeGeometry, transform: CanvasTransform) -> some View {
-        let isSelected = state.selection?.description == id
+        let isSelected = state.selectedRuntimeID == id
         let isDragging = dragStartRuntimeID == id
         let isHovered = hoveredRuntimeID == id
         let isResizing = resizingRuntimeID == id
@@ -377,6 +377,7 @@ struct OverlayView: View {
                     return
                 }
                 state.selection = node.id
+                state.selectedRuntimeID = hitID
             }
     }
 
@@ -427,6 +428,7 @@ struct OverlayView: View {
                         if let node = state.node(forRuntimeID: hitID) {
                             print("[LiveUI] canvas: resolved to node \(node.id)")
                             state.selection = node.id
+                            state.selectedRuntimeID = hitID
                         } else {
                             print("[LiveUI] canvas: could NOT resolve '\(hitID)' to an indexed node")
                             state.lastError = "Couldn't match runtime view '\(hitID)' back to a node in the indexed source — check that its .liveUITag(file:) matches the file SourceIndexer sees."

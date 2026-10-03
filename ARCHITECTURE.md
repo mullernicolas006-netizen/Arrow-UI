@@ -209,20 +209,42 @@ What this deliberately does *not* do yet:
   — its *hit area* is now a separate, larger (22pt) invisible region
   centered on the same point.
 
-  The actual root cause, found after those two didn't fix it: `state
-  .selection` (what makes handles render at all) only ever got set from
+  A real fix along the way: `state.selection` only ever got set from
   `dragGesture`'s `onChanged` — and a plain `DragGesture`, even with
   `minimumDistance: 0`, is built around tracking *motion*. On macOS it's
   driven by `mouseDragged` events, which a genuinely stationary click
   (`mouseDown` immediately followed by `mouseUp`, no movement at all in
   between) never generates, so `onChanged` could simply never fire for a
-  real click regardless of `minimumDistance` — selection never happened,
-  so neither of the above two fixes mattered. `tapGesture` (a
+  real click regardless of `minimumDistance`. `tapGesture` (a
   `SpatialTapGesture`, built on an actual click recognizer, not
   motion-tracking) now handles selection on its own, composed with
-  `dragGesture` via `.simultaneously(with:)` on the same view — a plain
-  click selects even when `dragGesture` never starts, and an actual drag
-  still moves/resizes via `dragGesture` exactly as before.
+  `dragGesture` via `.simultaneously(with:)` on the same view.
+
+  **The actual root cause**, found only after real console logs showed
+  selection *was* firing correctly on every click (`hit` / `resolved` /
+  `tap` all logging as expected) and resize still never triggered:
+  `boxView`'s `isSelected` check compared `state.selection?.description`
+  — the *indexed* node's full `ViewNodeID.description`, e.g.
+  `"VStack@/Users/.../ContentView.swift#0.2.0.5.1.0.0.3.0.2.1.0.0"`
+  (absolute file path, deep real structural path) — against `id`, the
+  *runtime*-reported id string, e.g. `"VStack@ContentView.swift#2"`
+  (short hand-typed file name and path from `.liveUITag(id:)`). These
+  two string formats can never be equal, so `isSelected` was `false`
+  unconditionally, for every view, regardless of what was clicked —
+  meaning resize handles (gated purely on `isSelected`) could never have
+  rendered no matter how correct everything else was. The outline still
+  *looked* like selection worked in earlier testing only because
+  `isDragging` (a correct runtime-id-to-runtime-id comparison) was
+  transiently true during an active drag — never because of
+  `isSelected`.
+
+  Fixed with a new `AppState.selectedRuntimeID: String?`, set directly
+  from the same `hitID` `OverlayView` already resolves `selection`
+  from (in both `tapGesture` and `dragGesture`), and compared
+  runtime-id-to-runtime-id in `boxView` — the same pattern `isDragging`
+  already used correctly. `state.selection` itself (the indexed
+  `ViewNodeID`) is unaffected and still correct for `InspectorView`,
+  which compares `ViewNodeID` to `ViewNodeID`, not to a runtime string.
 
   The cursor also changes to a diagonal resize icon on hover over a
   handle (`resizeCursor(for:)`), reset on hover-exit and, belt-and-
