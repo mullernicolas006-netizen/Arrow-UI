@@ -1,0 +1,190 @@
+import Foundation
+import LiveUIModels
+
+/// A raw drag gesture on a selected view, already reduced to "how far did
+/// it move, along which axis, inside what kind of parent" — the input the
+/// Layout Intelligence Engine needs to decide *what in the source* should
+/// change (§14-17).
+public struct DragIntent {
+    public enum Axis { case horizontal, vertical }
+
+    public var target: ViewNodeID
+    public var parentType: String?
+    public var axis: Axis
+    public var deltaPoints: Double
+    public var currentSpacingValue: Int?
+    /// The value of an existing `.padding(<edge>, N)` modifier *matching
+    /// this drag's axis* on the dragged view, if one already exists — lets
+    /// the padding fallback merge into it (old + delta) instead of
+    /// stacking a new `.padding()` call on every drag. Must be for the
+    /// same edge the fallback would itself target (see `edgeName`) —
+    /// mixing edges here would silently merge a vertical drag's delta
+    /// into a horizontal padding value or vice versa.
+    public var currentPaddingValue: Int?
+
+    public init(target: ViewNodeID, parentType: String?, axis: Axis, deltaPoints: Double, currentSpacingValue: Int?, currentPaddingValue: Int? = nil) {
+        self.target = target
+        self.parentType = parentType
+        self.axis = axis
+        self.deltaPoints = deltaPoints
+        self.currentSpacingValue = currentSpacingValue
+        self.currentPaddingValue = currentPaddingValue
+    }
+}
+
+/// Translates a raw drag gesture into a *semantic* `Mutation` — the central
+/// product bet described in §69 ("the holy grail"): dragging a button
+/// inside a `VStack` should grow the stack's `spacing`, not bolt on an
+/// `.offset()`.
+///
+/// This is intentionally a small, explicit decision table rather than a
+/// general solver. Per §67 ("not too much magic"), the MVP only needs to
+/// get a handful of cases right, reliably:
+///   - drag along a VStack's own axis (vertical)  -> change `spacing`
+///   - drag along an HStack's own axis (horizontal) -> change `spacing`
+///   - anything else (ZStack, cross-axis drag, no known parent) -> a
+///     padding nudge on the dragged view itself, which is still a
+///     legitimate layout property (never a raw `.offset()` — see §5-6).
+///
+/// The padding fallback is deliberately edge-specific (`.padding(.top,
+/// N)` / `.padding(.leading, N)`), not the unlabeled `.padding(N)` form
+/// that pads all four sides — a vertical-only drag must never also shift
+/// the view horizontally, and vice versa. Using the all-edges form here
+/// was an earlier bug: a pure vertical drag was silently also padding
+/// left/right equally, visibly shoving the view sideways.
+public enum LayoutEngine {
+
+    public static func mutation(for intent: DragIntent, stackNodeID: ViewNodeID?) -> Mutation {
+        switch (intent.parentType, stackNodeID) {
+        case ("VStack", .some(let stackID)) where intent.axis == .vertical:
+            return spacingMutation(stackID: stackID, callName: "VStack", current: intent.currentSpacingValue, delta: intent.deltaPoints)
+
+        case ("HStack", .some(let stackID)) where intent.axis == .horizontal:
+            return spacingMutation(stackID: stackID, callName: "HStack", current: intent.currentSpacingValue, delta: intent.deltaPoints)
+
+        default:
+            let edge = edgeName(for: intent.axis)
+            if let current = intent.currentPaddingValue {
+                let new = current + Int(intent.deltaPoints.rounded())
+                return .modifyModifierArgument(
+                    target: intent.target,
+                    modifierName: "padding",
+                    argumentLabel: nil,
+                    argumentIndex: 1,
+                    oldValue: .integer(current),
+                    newValue: .integer(new)
+                )
+            }
+            return .addModifier(
+                target: intent.target,
+                modifierName: "padding",
+                arguments: [
+                    MutationArgument(label: nil, value: .memberShorthand(edge)),
+                    MutationArgument(label: nil, value: .integer(Int(intent.deltaPoints.rounded())))
+                ]
+            )
+        }
+    }
+
+    /// Which `Edge` a fallback padding drag should target for a given
+    /// axis. Callers (the canvas gesture) must use the same mapping when
+    /// reading back an existing padding value for `currentPaddingValue`.
+    public static func edgeName(for axis: DragIntent.Axis) -> String {
+        axis == .vertical ? "top" : "leading"
+    }
+
+    private static func spacingMutation(stackID: ViewNodeID, callName: String, current: Int?, delta: Double) -> Mutation {
+        let old = current ?? 0
+        let new = max(0, old + Int(delta.rounded()))
+        return .modifyArgument(
+            target: stackID,
+            callName: callName,
+            argumentLabel: "spacing",
+            argumentIndex: 0,
+            oldValue: .integer(old),
+            newValue: .integer(new)
+        )
+    }
+
+    /// Exact-position dragging: an explicit alternative to `mutation(for:
+    /// stackNodeID:)` above, used when the product wants a drag to land
+    /// precisely where the cursor was released rather than approximate a
+    /// semantic layout property. Real user testing of the spacing/padding
+    /// approach kept surfacing as "it doesn't land exactly where I dragged
+    /// it, and sometimes nudges a sibling too" — both true by construction
+    /// of that approach, not bugs in it. `.offset(x:, y:)` is a pure
+    /// rendering displacement: it never participates in the parent's
+    /// layout pass, so it can never resize a stack or push a sibling, and
+    /// the view moves by exactly the delta given.
+    ///
+    /// Accumulates into a single `.offset(x:, y:)` modifier on the dragged
+    /// view across repeated drags (reads the existing value back via
+    /// `currentOffset` rather than stacking a new modifier each time),
+    /// exactly like the padding fallback above did for the same reason:
+    /// two separate offset calls would apply additively and the view
+    /// would drift from where it was actually dropped.
+    public static func offsetMutation(target: ViewNodeID, currentOffset: (x: Int, y: Int)?, axis: DragIntent.Axis, delta: Double) -> Mutation {
+        let roundedDelta = Int(delta.rounded())
+        let oldX = currentOffset?.x ?? 0
+        let oldY = currentOffset?.y ?? 0
+        let newX = axis == .horizontal ? oldX + roundedDelta : oldX
+        let newY = axis == .vertical ? oldY + roundedDelta : oldY
+
+        guard currentOffset != nil else {
+            return .addModifier(
+                target: target,
+                modifierName: "offset",
+                arguments: [
+                    MutationArgument(label: "x", value: .integer(newX)),
+                    MutationArgument(label: "y", value: .integer(newY))
+                ]
+            )
+        }
+        return .modifyModifierArgument(
+            target: target,
+            modifierName: "offset",
+            argumentLabel: axis == .horizontal ? "x" : "y",
+            argumentIndex: axis == .horizontal ? 0 : 1,
+            oldValue: .integer(axis == .horizontal ? oldX : oldY),
+            newValue: .integer(axis == .horizontal ? newX : newY)
+        )
+    }
+
+    /// Resize-handle dragging: the sizing counterpart to `offsetMutation`,
+    /// builds/updates a single `.frame(width:, height:)` modifier on the
+    /// resized view.
+    ///
+    /// Unlike `offsetMutation`, "no existing `.frame()` yet" does *not*
+    /// mean the missing dimension is 0 — a view with no explicit frame
+    /// still has a real, measured size (its natural/intrinsic size).
+    /// `measuredSize` (the view's current `RuntimeGeometry`) is the
+    /// fallback baseline for whichever dimension isn't already pinned by
+    /// an existing `.frame()` call. Seeding a first-ever resize from 0
+    /// would snap the view to a tiny, wrong size instead of growing from
+    /// where it visually already is.
+    public static func sizeMutation(target: ViewNodeID, existingFrame: (width: Int, height: Int)?, measuredSize: (width: Int, height: Int), axis: DragIntent.Axis, delta: Double) -> Mutation {
+        let roundedDelta = Int(delta.rounded())
+        let baseline = existingFrame ?? measuredSize
+        let newWidth = axis == .horizontal ? max(1, baseline.width + roundedDelta) : baseline.width
+        let newHeight = axis == .vertical ? max(1, baseline.height + roundedDelta) : baseline.height
+
+        guard existingFrame != nil else {
+            return .addModifier(
+                target: target,
+                modifierName: "frame",
+                arguments: [
+                    MutationArgument(label: "width", value: .integer(newWidth)),
+                    MutationArgument(label: "height", value: .integer(newHeight))
+                ]
+            )
+        }
+        return .modifyModifierArgument(
+            target: target,
+            modifierName: "frame",
+            argumentLabel: axis == .horizontal ? "width" : "height",
+            argumentIndex: axis == .horizontal ? 0 : 1,
+            oldValue: .integer(axis == .horizontal ? baseline.width : baseline.height),
+            newValue: .integer(axis == .horizontal ? newWidth : newHeight)
+        )
+    }
+}
