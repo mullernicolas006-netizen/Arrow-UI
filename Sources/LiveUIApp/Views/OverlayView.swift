@@ -59,7 +59,11 @@ struct OverlayView: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .gesture(dragGesture(transform: transform))
+                // Selection and move/resize are two separate gestures,
+                // composed with .simultaneously — see tapGesture's doc
+                // comment for why a plain DragGesture alone (even at
+                // minimumDistance: 0) isn't reliable for "click selects."
+                .gesture(dragGesture(transform: transform).simultaneously(with: tapGesture(transform: transform)))
                 .onContinuousHover { phase in
                     // Suppressed mid-drag: otherwise the mouse passing over
                     // a different view while dragging would show a second,
@@ -337,6 +341,42 @@ struct OverlayView: View {
                 if handle.isTop, abs(deltaY) >= 1 {
                     applyOffset(hitID: id, axis: .vertical, delta: deltaY)
                 }
+            }
+    }
+
+    /// A dedicated gesture purely for "click selects" — separate from
+    /// `dragGesture`, which handles move/mutate. A plain `DragGesture`,
+    /// even with `minimumDistance: 0`, is built around tracking *motion*:
+    /// on macOS it's driven by `mouseDragged` events, which a genuinely
+    /// stationary click (`mouseDown` immediately followed by `mouseUp`,
+    /// no movement in between) never generates — so `onChanged` can
+    /// simply never fire for a real click, no matter how low
+    /// `minimumDistance` is set, and nothing gets selected. That was the
+    /// actual cause of "clicking doesn't select, and resize handles never
+    /// show up" — not a hit-testing or handle-size problem (both already
+    /// fixed, but neither mattered if selection itself never happened).
+    ///
+    /// `SpatialTapGesture` is built on an actual click recognizer
+    /// (`mouseDown`/`mouseUp`), not motion-tracking, so it fires reliably
+    /// for a real click regardless of whether the mouse moved at all.
+    /// Composed with `dragGesture` via `.simultaneously(with:)` so both
+    /// can recognize independently on the same view — a plain click
+    /// selects via this gesture even if `dragGesture` never starts, and
+    /// an actual drag still moves/resizes via `dragGesture` as before.
+    private func tapGesture(transform: CanvasTransform) -> some Gesture {
+        SpatialTapGesture()
+            .onEnded { value in
+                let devicePoint = transform.devicePoint(value.location)
+                print("[LiveUI] canvas: tap at canvas=\(value.location) -> device=\(devicePoint)")
+                guard let hitID = hitTest(devicePoint: devicePoint) else {
+                    print("[LiveUI] canvas: tap hit nothing")
+                    return
+                }
+                guard let node = state.node(forRuntimeID: hitID) else {
+                    print("[LiveUI] canvas: tap hit '\(hitID)' but it doesn't resolve to an indexed node")
+                    return
+                }
+                state.selection = node.id
             }
     }
 

@@ -200,20 +200,29 @@ What this deliberately does *not* do yet:
   heuristic the way `LayoutEngine.mutation`'s spacing path exists for
   moves — every resize always goes through `sizeMutation`).
 
-  Three things specifically made the handles hard to actually grab in
-  real testing, all fixed together: (1) `state.selection` — which is
-  what makes handles render at all — only ever got set from the canvas
-  drag gesture's `onChanged`, and that gesture had `minimumDistance: 2`,
-  so a plain stationary click never fired `onChanged` and never selected
-  anything; now `minimumDistance: 0`, so a click selects immediately
-  (the gesture's own `abs(delta) >= 1` thresholds still mean a real
-  click-with-no-movement writes no mutation). (2) `ResizeHandle` declared
-  only `CaseIterable`, not `Hashable`/`Equatable`, despite being used
-  with `ForEach(..., id: \.self)` and `==` — fixed by declaring the
-  conformance explicitly. (3) each handle's visible dot is only 9pt,
+  Several things made the handles hard to actually grab in real
+  testing. Two were real but secondary: `ResizeHandle` declared only
+  `CaseIterable`, not `Hashable`/`Equatable`, despite being used with
+  `ForEach(..., id: \.self)` and `==` — fixed by declaring the
+  conformance explicitly; and each handle's visible dot is only 9pt,
   genuinely hard to land a mouse on through `CanvasTransform`'s scaling
   — its *hit area* is now a separate, larger (22pt) invisible region
   centered on the same point.
+
+  The actual root cause, found after those two didn't fix it: `state
+  .selection` (what makes handles render at all) only ever got set from
+  `dragGesture`'s `onChanged` — and a plain `DragGesture`, even with
+  `minimumDistance: 0`, is built around tracking *motion*. On macOS it's
+  driven by `mouseDragged` events, which a genuinely stationary click
+  (`mouseDown` immediately followed by `mouseUp`, no movement at all in
+  between) never generates, so `onChanged` could simply never fire for a
+  real click regardless of `minimumDistance` — selection never happened,
+  so neither of the above two fixes mattered. `tapGesture` (a
+  `SpatialTapGesture`, built on an actual click recognizer, not
+  motion-tracking) now handles selection on its own, composed with
+  `dragGesture` via `.simultaneously(with:)` on the same view — a plain
+  click selects even when `dragGesture` never starts, and an actual drag
+  still moves/resizes via `dragGesture` exactly as before.
 
   The cursor also changes to a diagonal resize icon on hover over a
   handle (`resizeCursor(for:)`), reset on hover-exit and, belt-and-
