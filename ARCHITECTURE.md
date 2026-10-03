@@ -237,6 +237,22 @@ What this deliberately does *not* do yet:
   built from an SF Symbol (`arrow.up.left.and.arrow.down.right` /
   `arrow.up.right.and.arrow.down.left`) via `NSCursor(image:hotSpot:)` —
   both are literally diagonal double-headed arrows, public API only.
+
+  **Real crash found via a pasted console log, not guessed at:** the
+  diagnostic `print()` calls added a few iterations earlier (to trace
+  the live-preview send/receive path end to end) included one on *every*
+  `.onChanged` tick in both `OverlayView`'s drag gesture and
+  `LiveUIPreviewStore.apply` — a drag gesture's `onChanged` can fire
+  dozens of times per second, and logging every single one flooded
+  Xcode's debug console fast enough that the Playground app got killed
+  outright (`Terminated due to signal 9`), before the user could ever
+  see whether selection/resize/drag had actually worked. The flooded log
+  itself was the proof the preview mechanism *was* working — real
+  `previewOffset` values streaming through correctly — so this was never
+  a selection or hit-testing bug at all; it was the logging that had
+  been added to debug an earlier, different problem. Both per-tick
+  `print()` calls are gone now; the one-time start/end logs in
+  `dragGesture`/`resizeGesture`/`tapGesture` stay.
 - **Selection outlines are hover/selection-only, not always-on.** Early
   versions drew a box for *every* known view simultaneously. Since a
   parent's box always encloses its children's (a VStack's box always

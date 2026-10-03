@@ -445,7 +445,15 @@ struct OverlayView: View {
                     // updates (and renders) on the runtime side per tick,
                     // which looked like the view taking two small steps
                     // instead of one smooth one.
-                    print("[LiveUI] canvas: sendPreview \(hitID) x=\(deltaX) y=\(deltaY), runtimeConnected=\(state.isRuntimeConnected)")
+                    //
+                    // Deliberately no print() here: a drag gesture's
+                    // onChanged can fire dozens of times per second, and
+                    // real testing showed that logging every single tick
+                    // (here and in LiveUIPreviewStore.apply) floods
+                    // Xcode's debug console fast enough to get the app
+                    // killed outright ("Terminated due to signal 9") —
+                    // not a bug in the preview mechanism itself, which
+                    // the same flooded log actually proved was working.
                     state.sendPreview(.previewOffset(nodeID: hitID, x: deltaX, y: deltaY))
                 }
             }
