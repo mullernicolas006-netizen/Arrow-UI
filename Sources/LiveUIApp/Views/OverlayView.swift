@@ -183,7 +183,7 @@ struct OverlayView: View {
     /// stays anchored in place, the way every other design tool's corner
     /// handles behave: dragging the top-left handle grows the view
     /// toward the top-left, it doesn't grow away from it).
-    private enum ResizeHandle: CaseIterable {
+    private enum ResizeHandle: CaseIterable, Hashable {
         case topLeft, topRight, bottomLeft, bottomRight
 
         var isLeft: Bool { self == .topLeft || self == .bottomLeft }
@@ -211,6 +211,15 @@ struct OverlayView: View {
         return CGRect(x: x, y: y, width: max(width, 1), height: max(height, 1))
     }
 
+    /// The handle's visible dot is small (so it doesn't obscure the
+    /// content at the corner it sits on), but its *hit area* is much
+    /// bigger — a 9pt dot is a genuinely hard target to land a mouse on,
+    /// especially since the canvas itself is scaled by `CanvasTransform`.
+    /// `hitAreaSize` is the actual draggable region; only `dotSize` of it
+    /// is drawn.
+    private let resizeHandleHitAreaSize: CGFloat = 22
+    private let resizeHandleDotSize: CGFloat = 9
+
     private func resizeHandleView(id: String, handle: ResizeHandle, rect: CGRect, transform: CanvasTransform) -> some View {
         let point: CGPoint
         switch handle {
@@ -219,19 +228,25 @@ struct OverlayView: View {
         case .bottomLeft: point = CGPoint(x: rect.minX, y: rect.maxY)
         case .bottomRight: point = CGPoint(x: rect.maxX, y: rect.maxY)
         }
-        return Circle()
-            .fill(Color.white)
-            .overlay(Circle().strokeBorder(Color.black.opacity(0.4), lineWidth: 1))
-            .frame(width: 9, height: 9)
-            .shadow(color: .black.opacity(0.3), radius: 1.5)
-            .position(point)
-            // highPriorityGesture, not gesture: a handle sits right at
-            // the edge of the view it belongs to, so the same touch is
-            // also inside the canvas-wide move-drag gesture's hit area.
-            // Without this, a drag started exactly on a handle could
-            // trigger *both* gestures — a resize and a conflicting move
-            // — instead of just the resize.
-            .highPriorityGesture(resizeGesture(id: id, handle: handle, transform: transform))
+        return ZStack {
+            Color.clear
+                .frame(width: resizeHandleHitAreaSize, height: resizeHandleHitAreaSize)
+                .contentShape(Rectangle())
+            Circle()
+                .fill(Color.white)
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.4), lineWidth: 1))
+                .frame(width: resizeHandleDotSize, height: resizeHandleDotSize)
+                .shadow(color: .black.opacity(0.3), radius: 1.5)
+                .allowsHitTesting(false)
+        }
+        .position(point)
+        // highPriorityGesture, not gesture: a handle sits right at
+        // the edge of the view it belongs to, so the same touch is
+        // also inside the canvas-wide move-drag gesture's hit area.
+        // Without this, a drag started exactly on a handle could
+        // trigger *both* gestures — a resize and a conflicting move
+        // — instead of just the resize.
+        .highPriorityGesture(resizeGesture(id: id, handle: handle, transform: transform))
     }
 
     /// Dragging a corner handle: the two edges meeting at that corner
@@ -314,8 +329,18 @@ struct OverlayView: View {
     /// resize a stack or move anything else, and the view moves by
     /// exactly the delta given. Both axes of a diagonal drag are applied
     /// independently, not just whichever moved more.
+    ///
+    /// `minimumDistance: 0` deliberately: selection (`state.selection`,
+    /// which is what makes resize handles show up at all) only ever
+    /// happens here, in `onChanged`. With a larger minimum distance, a
+    /// plain click with no mouse movement never fired `onChanged` at
+    /// all, so a stationary click never selected anything — the view
+    /// could only be selected as a side effect of also nudging it. At
+    /// 0, `onChanged` fires immediately on mouse-down, so a plain click
+    /// selects the view; `onEnded`'s own `abs(delta) >= 1` thresholds
+    /// still mean a click with no real movement never writes a mutation.
     private func dragGesture(transform: CanvasTransform) -> some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .local)
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
                 if dragStartRuntimeID == nil {
                     let devicePoint = transform.devicePoint(value.startLocation)
