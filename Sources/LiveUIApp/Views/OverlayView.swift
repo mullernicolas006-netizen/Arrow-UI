@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import SwiftSyntax
 import LiveUICore
 import LiveUIModels
@@ -247,6 +248,34 @@ struct OverlayView: View {
         // trigger *both* gestures — a resize and a conflicting move
         // — instead of just the resize.
         .highPriorityGesture(resizeGesture(id: id, handle: handle, transform: transform))
+        // SwiftUI never changes the cursor on its own — this is the
+        // part that makes a handle actually *feel* like a resize
+        // control rather than just another draggable dot. AppKit has no
+        // public diagonal-resize NSCursor (only resizeLeftRight /
+        // resizeUpDown), so this builds one from an SF Symbol instead of
+        // reaching for a private/undocumented cursor selector.
+        .onHover { isHovering in
+            if isHovering {
+                resizeCursor(for: handle).set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+    }
+
+    /// AppKit's public `NSCursor` API has no diagonal resize cursor —
+    /// only `.resizeLeftRight`/`.resizeUpDown`. Building one from an SF
+    /// Symbol (`arrow.up.left.and.arrow.down.right` /
+    /// `arrow.up.right.and.arrow.down.left`, both literally diagonal
+    /// double-headed arrows) is the honest way to get that look without
+    /// a private API or a shipped image asset.
+    private func resizeCursor(for handle: ResizeHandle) -> NSCursor {
+        let alongTopLeftToBottomRight = handle == .topLeft || handle == .bottomRight
+        let symbolName = alongTopLeftToBottomRight ? "arrow.up.left.and.arrow.down.right" : "arrow.up.right.and.arrow.down.left"
+        guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else {
+            return .arrow
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: image.size.width / 2, y: image.size.height / 2))
     }
 
     /// Dragging a corner handle: the two edges meeting at that corner
@@ -277,6 +306,13 @@ struct OverlayView: View {
                     resizingRuntimeID = nil
                     resizeHandle = nil
                     resizeTranslation = .zero
+                    // Belt-and-suspenders alongside the handle's own
+                    // .onHover: during an active drag, the mouse is often
+                    // far from the handle's hit area by the time the
+                    // gesture ends, and hover-exit tracking isn't fully
+                    // reliable mid-gesture — this guarantees the cursor
+                    // doesn't get stuck as a resize icon.
+                    NSCursor.arrow.set()
                 }
                 guard transform.scale > 0 else {
                     print("[LiveUI] canvas: resize ended — bad scale, no mutation")

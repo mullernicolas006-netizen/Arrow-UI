@@ -199,6 +199,35 @@ What this deliberately does *not* do yet:
   child behaving any differently (there isn't a parent-aware resize
   heuristic the way `LayoutEngine.mutation`'s spacing path exists for
   moves — every resize always goes through `sizeMutation`).
+
+  Three things specifically made the handles hard to actually grab in
+  real testing, all fixed together: (1) `state.selection` — which is
+  what makes handles render at all — only ever got set from the canvas
+  drag gesture's `onChanged`, and that gesture had `minimumDistance: 2`,
+  so a plain stationary click never fired `onChanged` and never selected
+  anything; now `minimumDistance: 0`, so a click selects immediately
+  (the gesture's own `abs(delta) >= 1` thresholds still mean a real
+  click-with-no-movement writes no mutation). (2) `ResizeHandle` declared
+  only `CaseIterable`, not `Hashable`/`Equatable`, despite being used
+  with `ForEach(..., id: \.self)` and `==` — fixed by declaring the
+  conformance explicitly. (3) each handle's visible dot is only 9pt,
+  genuinely hard to land a mouse on through `CanvasTransform`'s scaling
+  — its *hit area* is now a separate, larger (22pt) invisible region
+  centered on the same point.
+
+  The cursor also changes to a diagonal resize icon on hover over a
+  handle (`resizeCursor(for:)`), reset on hover-exit and, belt-and-
+  suspenders, in the gesture's own `onEnded` (hover-exit tracking isn't
+  fully reliable mid-drag). SwiftUI doesn't do this automatically for
+  any gesture — it has to be built explicitly via `.onHover` +
+  `NSCursor`. AppKit's public `NSCursor` API has no diagonal-resize
+  cursor (only `.resizeLeftRight`/`.resizeUpDown`); rather than reach for
+  a private/undocumented cursor selector (which real apps do use, but
+  it's exactly the kind of risky-undocumented-API choice this project
+  has avoided everywhere else — see `idb`, `simctl`), the cursor is
+  built from an SF Symbol (`arrow.up.left.and.arrow.down.right` /
+  `arrow.up.right.and.arrow.down.left`) via `NSCursor(image:hotSpot:)` —
+  both are literally diagonal double-headed arrows, public API only.
 - **Selection outlines are hover/selection-only, not always-on.** Early
   versions drew a box for *every* known view simultaneously. Since a
   parent's box always encloses its children's (a VStack's box always
