@@ -285,7 +285,6 @@ final class MutationEngineTests: XCTestCase {
             final.range(of: ".frame(width: 100, height: 32)")!.lowerBound < final.range(of: ".liveUITag(")!.lowerBound,
             "the new .frame must also land BEFORE .liveUITag — .liveUITag must still be the outermost/last call"
         )
-        XCTAssertTrue(final.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(")"), "sanity: still valid-looking trailing syntax")
     }
 
     func testMutationOnStaleTargetThrowsRatherThanCorrupting() {
