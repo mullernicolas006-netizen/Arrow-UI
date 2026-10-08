@@ -274,7 +274,31 @@ What this deliberately does *not* do yet:
   a selection or hit-testing bug at all; it was the logging that had
   been added to debug an earlier, different problem. Both per-tick
   `print()` calls are gone now; the one-time start/end logs in
-  `dragGesture`/`resizeGesture`/`tapGesture` stay.
+  `dragGesture`/`tapGesture` stay.
+- **Resize handles rendered and selection worked, but dragging a handle
+  did nothing and the cursor never changed — `.highPriorityGesture`
+  silently loses to a 0-distance ancestor `DragGesture`.** With
+  `selectedRuntimeID` fixed, handles appeared, but testing showed the
+  handle itself was receiving *no* mouse events at all: no hover-cursor
+  change, no resize mutation, nothing in `Code Changes`. Each handle had
+  its own `DragGesture` attached via `.highPriorityGesture` plus its own
+  `.onHover`, on the theory (also SwiftUI's own documented example) that
+  a descendant's `.highPriorityGesture` wins over an ancestor's
+  `.gesture`. In practice this doesn't reliably hold when the ancestor's
+  gesture is a `DragGesture(minimumDistance: 0)`: at 0 distance the
+  ancestor starts recognizing on the very first `mouseDown`, before the
+  system gives the descendant's `highPriorityGesture` a chance to claim
+  the touch — so the handle's gesture and `.onHover` never fired at all,
+  for either resizing or the cursor, matching exactly what was reported.
+  `OverlayView` no longer attaches any gesture or `.onHover` to resize
+  handle views — `resizeHandleView` is now purely visual. Hit-testing for
+  "is this point on a resize handle for the selected view" moved into a
+  single `resizeHandleHitTest(canvasPoint:transform:)` helper, checked
+  first inside the one canvas-wide `dragGesture` (on the very first tick,
+  before deciding "move" vs. "resize") and in `onContinuousHover` (for
+  the cursor), so there's no cross-view gesture-priority system to fight
+  at all — one gesture recognizer sees the event first, period, and
+  branches on `resizingRuntimeID` for the rest of that drag.
 - **Selection outlines are hover/selection-only, not always-on.** Early
   versions drew a box for *every* known view simultaneously. Since a
   parent's box always encloses its children's (a VStack's box always

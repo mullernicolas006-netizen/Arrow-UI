@@ -65,16 +65,32 @@ struct OverlayView: View {
                 // minimumDistance: 0) isn't reliable for "click selects."
                 .gesture(dragGesture(transform: transform).simultaneously(with: tapGesture(transform: transform)))
                 .onContinuousHover { phase in
-                    // Suppressed mid-drag: otherwise the mouse passing over
-                    // a different view while dragging would show a second,
-                    // unrelated box alongside the one actually being
-                    // dragged.
-                    guard dragStartRuntimeID == nil else { return }
+                    // Suppressed mid-drag/mid-resize: otherwise the mouse
+                    // passing over a different view while dragging would
+                    // show a second, unrelated box alongside the one
+                    // actually being dragged.
+                    guard dragStartRuntimeID == nil, resizingRuntimeID == nil else { return }
                     switch phase {
                     case .active(let location):
-                        hoveredRuntimeID = hitTest(devicePoint: transform.devicePoint(location))
+                        // Checked first and exclusively: a resize handle
+                        // can sit right at the edge of (or just outside)
+                        // its view's own geometry rect, so without this
+                        // order a handle hover could also register as
+                        // "hovering the view underneath," showing the
+                        // wrong cursor. See `resizeHandleHitTest`'s doc
+                        // comment for why this (and the actual resize
+                        // drag itself) is centralized here instead of on
+                        // each handle view.
+                        if let hit = resizeHandleHitTest(canvasPoint: location, transform: transform) {
+                            hoveredRuntimeID = nil
+                            resizeCursor(for: hit.handle).set()
+                        } else {
+                            NSCursor.arrow.set()
+                            hoveredRuntimeID = hitTest(devicePoint: transform.devicePoint(location))
+                        }
                     case .ended:
                         hoveredRuntimeID = nil
+                        NSCursor.arrow.set()
                     }
                 }
             }
@@ -175,7 +191,7 @@ struct OverlayView: View {
             // on hover so you can see what you're about to click.
             if isSelected {
                 ForEach(ResizeHandle.allCases, id: \.self) { handle in
-                    resizeHandleView(id: id, handle: handle, rect: rect, transform: transform)
+                    resizeHandleView(handle: handle, rect: rect)
                 }
             }
         }
@@ -197,7 +213,8 @@ struct OverlayView: View {
 
     /// `rect` adjusted for the in-flight resize translation, purely for
     /// the local, zero-latency on-canvas preview — the same sign logic
-    /// `resizeGesture`'s `onEnded` uses to build the real mutations.
+    /// `dragGesture`'s resize branch in `onEnded` uses to build the real
+    /// mutations.
     private func resizedRect(origin: CGPoint, size: CGSize, handle: ResizeHandle?, translation: CGSize) -> CGRect {
         guard let handle else { return CGRect(origin: origin, size: size) }
         var x = origin.x, y = origin.y, width = size.width, height = size.height
@@ -217,15 +234,22 @@ struct OverlayView: View {
     }
 
     /// The handle's visible dot is small (so it doesn't obscure the
-    /// content at the corner it sits on), but its *hit area* is much
-    /// bigger — a 9pt dot is a genuinely hard target to land a mouse on,
-    /// especially since the canvas itself is scaled by `CanvasTransform`.
-    /// `hitAreaSize` is the actual draggable region; only `dotSize` of it
-    /// is drawn.
+    /// content at the corner it sits on), but the actual draggable/
+    /// hoverable region (`resizeHandleHitAreaSize`) is much bigger — a 9pt
+    /// dot is a genuinely hard target to land a mouse on, especially
+    /// since the canvas itself is scaled by `CanvasTransform`. That hit
+    /// region isn't a separate view anymore (see the note on
+    /// `resizeHandleHitTest` for why) — it's purely a square centered on
+    /// this same point, tested directly against the mouse location by the
+    /// canvas-wide gesture/hover handlers.
     private let resizeHandleHitAreaSize: CGFloat = 22
     private let resizeHandleDotSize: CGFloat = 9
 
-    private func resizeHandleView(id: String, handle: ResizeHandle, rect: CGRect, transform: CanvasTransform) -> some View {
+    /// Purely visual — no gesture, no `.onHover` here. See
+    /// `resizeHandleHitTest`'s doc comment for why hit-testing for
+    /// resize handles is centralized in the canvas-wide gesture instead
+    /// of attached per-handle.
+    private func resizeHandleView(handle: ResizeHandle, rect: CGRect) -> some View {
         let point: CGPoint
         switch handle {
         case .topLeft: point = CGPoint(x: rect.minX, y: rect.minY)
@@ -233,38 +257,52 @@ struct OverlayView: View {
         case .bottomLeft: point = CGPoint(x: rect.minX, y: rect.maxY)
         case .bottomRight: point = CGPoint(x: rect.maxX, y: rect.maxY)
         }
-        return ZStack {
-            Color.clear
-                .frame(width: resizeHandleHitAreaSize, height: resizeHandleHitAreaSize)
-                .contentShape(Rectangle())
-            Circle()
-                .fill(Color.white)
-                .overlay(Circle().strokeBorder(Color.black.opacity(0.4), lineWidth: 1))
-                .frame(width: resizeHandleDotSize, height: resizeHandleDotSize)
-                .shadow(color: .black.opacity(0.3), radius: 1.5)
-                .allowsHitTesting(false)
-        }
-        .position(point)
-        // highPriorityGesture, not gesture: a handle sits right at
-        // the edge of the view it belongs to, so the same touch is
-        // also inside the canvas-wide move-drag gesture's hit area.
-        // Without this, a drag started exactly on a handle could
-        // trigger *both* gestures — a resize and a conflicting move
-        // — instead of just the resize.
-        .highPriorityGesture(resizeGesture(id: id, handle: handle, transform: transform))
-        // SwiftUI never changes the cursor on its own — this is the
-        // part that makes a handle actually *feel* like a resize
-        // control rather than just another draggable dot. AppKit has no
-        // public diagonal-resize NSCursor (only resizeLeftRight /
-        // resizeUpDown), so this builds one from an SF Symbol instead of
-        // reaching for a private/undocumented cursor selector.
-        .onHover { isHovering in
-            if isHovering {
-                resizeCursor(for: handle).set()
-            } else {
-                NSCursor.arrow.set()
+        return Circle()
+            .fill(Color.white)
+            .overlay(Circle().strokeBorder(Color.black.opacity(0.4), lineWidth: 1))
+            .frame(width: resizeHandleDotSize, height: resizeHandleDotSize)
+            .shadow(color: .black.opacity(0.3), radius: 1.5)
+            .position(point)
+            .allowsHitTesting(false)
+    }
+
+    /// Whether `canvasPoint` (in the same canvas-local coordinate space
+    /// `dragGesture`/`onContinuousHover` already work in) falls within a
+    /// resize handle's hit box for the currently *selected* view, and if
+    /// so, which corner.
+    ///
+    /// This used to be a `.highPriorityGesture` + `.onHover` attached
+    /// directly to each handle view, relying on SwiftUI to give a
+    /// descendant's gesture priority over the canvas-wide
+    /// `DragGesture(minimumDistance: 0)`. In practice that never won the
+    /// race: a 0-distance `DragGesture` on an ancestor starts recognizing
+    /// on the very first `mouseDown`, before the system gives a
+    /// `highPriorityGesture` descendant a chance to claim it — so the
+    /// handle silently never received *any* mouse event, hover or drag
+    /// (matching exactly what testing showed: no cursor change, no
+    /// resize, nothing). Doing the hit-test here, inside the one
+    /// top-level gesture/hover handler that's guaranteed to see the
+    /// event first, sidesteps SwiftUI's cross-view gesture-priority
+    /// system entirely instead of fighting it.
+    private func resizeHandleHitTest(canvasPoint: CGPoint, transform: CanvasTransform) -> (id: String, handle: ResizeHandle)? {
+        guard let id = state.selectedRuntimeID, let geometry = state.runtimeGeometry[id] else { return nil }
+        let origin = transform.point(CGPoint(x: geometry.x, y: geometry.y))
+        let size = transform.size(CGSize(width: geometry.width, height: geometry.height))
+        let rect = CGRect(origin: origin, size: size)
+        let corners: [(ResizeHandle, CGPoint)] = [
+            (.topLeft, CGPoint(x: rect.minX, y: rect.minY)),
+            (.topRight, CGPoint(x: rect.maxX, y: rect.minY)),
+            (.bottomLeft, CGPoint(x: rect.minX, y: rect.maxY)),
+            (.bottomRight, CGPoint(x: rect.maxX, y: rect.maxY))
+        ]
+        let half = resizeHandleHitAreaSize / 2
+        for (handle, point) in corners {
+            let hitBox = CGRect(x: point.x - half, y: point.y - half, width: resizeHandleHitAreaSize, height: resizeHandleHitAreaSize)
+            if hitBox.contains(canvasPoint) {
+                return (id, handle)
             }
         }
+        return nil
     }
 
     /// AppKit's public `NSCursor` API has no diagonal resize cursor —
@@ -280,68 +318,6 @@ struct OverlayView: View {
             return .arrow
         }
         return NSCursor(image: image, hotSpot: NSPoint(x: image.size.width / 2, y: image.size.height / 2))
-    }
-
-    /// Dragging a corner handle: the two edges meeting at that corner
-    /// move with the cursor, the two opposite edges stay put — exactly
-    /// like `.offsetMutation`, this writes `.frame(width:, height:)` (and,
-    /// for top/left handles, also `.offset(x:, y:)`), never a spacing or
-    /// padding hack, so a resize can never affect a sibling.
-    ///
-    /// Unlike the move-drag gesture, this doesn't yet stream a live
-    /// preview to the running app over the bridge — only the local
-    /// outline previews the resize in flight. Adding that hit a real
-    /// composition problem a move-drag doesn't: a repeated resize's live
-    /// override would need to apply *outside* whatever `.frame()` a
-    /// previous resize's rebuild already compiled in, but `.liveUITag`
-    /// sits *inside* the modifier chain, so a second live-preview resize
-    /// would just get re-constrained by the already-compiled outer
-    /// `.frame()`. Left as a known gap (see ARCHITECTURE.md) rather than
-    /// worked around here.
-    private func resizeGesture(id: String, handle: ResizeHandle, transform: CanvasTransform) -> some Gesture {
-        DragGesture(minimumDistance: 1, coordinateSpace: .local)
-            .onChanged { value in
-                resizingRuntimeID = id
-                resizeHandle = handle
-                resizeTranslation = value.translation
-            }
-            .onEnded { value in
-                defer {
-                    resizingRuntimeID = nil
-                    resizeHandle = nil
-                    resizeTranslation = .zero
-                    // Belt-and-suspenders alongside the handle's own
-                    // .onHover: during an active drag, the mouse is often
-                    // far from the handle's hit area by the time the
-                    // gesture ends, and hover-exit tracking isn't fully
-                    // reliable mid-gesture — this guarantees the cursor
-                    // doesn't get stuck as a resize icon.
-                    NSCursor.arrow.set()
-                }
-                guard transform.scale > 0 else {
-                    print("[LiveUI] canvas: resize ended — bad scale, no mutation")
-                    return
-                }
-
-                let deltaX = value.translation.width / transform.scale
-                let deltaY = value.translation.height / transform.scale
-                let widthDelta = handle.isLeft ? -deltaX : deltaX
-                let heightDelta = handle.isTop ? -deltaY : deltaY
-                print("[LiveUI] canvas: resize ended on \(id) via \(handle), translation=\(value.translation) -> width delta=\(widthDelta), height delta=\(heightDelta)")
-
-                if abs(widthDelta) >= 1 {
-                    applySize(hitID: id, axis: .horizontal, delta: widthDelta)
-                }
-                if handle.isLeft, abs(deltaX) >= 1 {
-                    applyOffset(hitID: id, axis: .horizontal, delta: deltaX)
-                }
-                if abs(heightDelta) >= 1 {
-                    applySize(hitID: id, axis: .vertical, delta: heightDelta)
-                }
-                if handle.isTop, abs(deltaY) >= 1 {
-                    applyOffset(hitID: id, axis: .vertical, delta: deltaY)
-                }
-            }
     }
 
     /// A dedicated gesture purely for "click selects" — separate from
@@ -416,27 +392,61 @@ struct OverlayView: View {
     /// 0, `onChanged` fires immediately on mouse-down, so a plain click
     /// selects the view; `onEnded`'s own `abs(delta) >= 1` thresholds
     /// still mean a click with no real movement never writes a mutation.
+    ///
+    /// Also handles resizing: on the very first tick, before deciding
+    /// this is a move, it checks `resizeHandleHitTest` to see whether the
+    /// drag actually started on a resize handle for the selected view —
+    /// see that function's doc comment for why this has to be decided
+    /// inside this one top-level gesture rather than by a separate
+    /// gesture attached to each handle. Everything from that point on
+    /// (every further `onChanged` tick, and `onEnded`) branches on
+    /// `resizingRuntimeID` instead of `dragStartRuntimeID`.
+    ///
+    /// A resize writes `.frame(width:, height:)` (and, for top/left
+    /// handles, also `.offset(x:, y:)` so the opposite corner stays
+    /// anchored) — exactly like `offsetMutation`, never a spacing/padding
+    /// hack, so it can never affect a sibling. Unlike the move-drag path,
+    /// it doesn't stream a live preview over the bridge — only the local
+    /// outline previews the resize in flight. Adding that hit a real
+    /// composition problem a move-drag doesn't: a repeated resize's live
+    /// override would need to apply *outside* whatever `.frame()` a
+    /// previous resize's rebuild already compiled in, but `.liveUITag`
+    /// sits *inside* the modifier chain, so a second live-preview resize
+    /// would just get re-constrained by the already-compiled outer
+    /// `.frame()`. Left as a known gap (see ARCHITECTURE.md).
     private func dragGesture(transform: CanvasTransform) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
-                if dragStartRuntimeID == nil {
-                    let devicePoint = transform.devicePoint(value.startLocation)
-                    print("[LiveUI] canvas: drag started at canvas=\(value.startLocation) -> device=\(devicePoint), \(state.runtimeGeometry.count) known views")
-                    if let hitID = hitTest(devicePoint: devicePoint) {
-                        print("[LiveUI] canvas: hit '\(hitID)'")
-                        dragStartRuntimeID = hitID
-                        if let node = state.node(forRuntimeID: hitID) {
-                            print("[LiveUI] canvas: resolved to node \(node.id)")
-                            state.selection = node.id
-                            state.selectedRuntimeID = hitID
-                        } else {
-                            print("[LiveUI] canvas: could NOT resolve '\(hitID)' to an indexed node")
-                            state.lastError = "Couldn't match runtime view '\(hitID)' back to a node in the indexed source — check that its .liveUITag(file:) matches the file SourceIndexer sees."
-                        }
+                if dragStartRuntimeID == nil && resizingRuntimeID == nil {
+                    if let hit = resizeHandleHitTest(canvasPoint: value.startLocation, transform: transform) {
+                        print("[LiveUI] canvas: drag started on resize handle \(hit.handle) for \(hit.id)")
+                        resizingRuntimeID = hit.id
+                        resizeHandle = hit.handle
                     } else {
-                        print("[LiveUI] canvas: no hit at \(devicePoint)")
+                        let devicePoint = transform.devicePoint(value.startLocation)
+                        print("[LiveUI] canvas: drag started at canvas=\(value.startLocation) -> device=\(devicePoint), \(state.runtimeGeometry.count) known views")
+                        if let hitID = hitTest(devicePoint: devicePoint) {
+                            print("[LiveUI] canvas: hit '\(hitID)'")
+                            dragStartRuntimeID = hitID
+                            if let node = state.node(forRuntimeID: hitID) {
+                                print("[LiveUI] canvas: resolved to node \(node.id)")
+                                state.selection = node.id
+                                state.selectedRuntimeID = hitID
+                            } else {
+                                print("[LiveUI] canvas: could NOT resolve '\(hitID)' to an indexed node")
+                                state.lastError = "Couldn't match runtime view '\(hitID)' back to a node in the indexed source — check that its .liveUITag(file:) matches the file SourceIndexer sees."
+                            }
+                        } else {
+                            print("[LiveUI] canvas: no hit at \(devicePoint)")
+                        }
                     }
                 }
+
+                if resizingRuntimeID != nil {
+                    resizeTranslation = value.translation
+                    return
+                }
+
                 dragTranslation = value.translation
 
                 if let hitID = dragStartRuntimeID, transform.scale > 0 {
@@ -460,6 +470,39 @@ struct OverlayView: View {
                 }
             }
             .onEnded { value in
+                if let id = resizingRuntimeID, let handle = resizeHandle {
+                    defer {
+                        resizingRuntimeID = nil
+                        resizeHandle = nil
+                        resizeTranslation = .zero
+                        NSCursor.arrow.set()
+                    }
+                    guard transform.scale > 0 else {
+                        print("[LiveUI] canvas: resize ended — bad scale, no mutation")
+                        return
+                    }
+
+                    let deltaX = value.translation.width / transform.scale
+                    let deltaY = value.translation.height / transform.scale
+                    let widthDelta = handle.isLeft ? -deltaX : deltaX
+                    let heightDelta = handle.isTop ? -deltaY : deltaY
+                    print("[LiveUI] canvas: resize ended on \(id) via \(handle), translation=\(value.translation) -> width delta=\(widthDelta), height delta=\(heightDelta)")
+
+                    if abs(widthDelta) >= 1 {
+                        applySize(hitID: id, axis: .horizontal, delta: widthDelta)
+                    }
+                    if handle.isLeft, abs(deltaX) >= 1 {
+                        applyOffset(hitID: id, axis: .horizontal, delta: deltaX)
+                    }
+                    if abs(heightDelta) >= 1 {
+                        applySize(hitID: id, axis: .vertical, delta: heightDelta)
+                    }
+                    if handle.isTop, abs(deltaY) >= 1 {
+                        applyOffset(hitID: id, axis: .vertical, delta: deltaY)
+                    }
+                    return
+                }
+
                 defer {
                     dragStartRuntimeID = nil
                     dragTranslation = .zero
