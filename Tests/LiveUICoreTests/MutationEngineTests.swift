@@ -233,6 +233,61 @@ final class MutationEngineTests: XCTestCase {
         XCTAssertFalse(afterSecond.contains(".padding(-103)"))
     }
 
+    /// Reproduces the real bug reported from actual canvas testing: a
+    /// view is tagged with `.liveUITag(...)` (as every runtime-visible
+    /// view must be), gets dragged (adds `.offset`), then resized (adds
+    /// `.frame`) — a drag followed by a resize always lands `.liveUITag`
+    /// somewhere in the middle of the chain unless `addModifier`
+    /// specifically keeps re-inserting ahead of it. When that regresses,
+    /// `.liveUITag`'s own `GeometryReader` measures the view's geometry
+    /// *before* the new modifier applies, so a resize silently stops
+    /// reaching the reported `RuntimeGeometry` at all — on screen, the
+    /// view's box only ever looked like it moved (from `.frame`'s default
+    /// re-centering of its still-unchanged-size content), never actually
+    /// grew, which is exactly what real testing showed.
+    func testLiveUITagStaysOutermostAcrossDragThenResize() throws {
+        let source = """
+        struct ContentView: View {
+            var body: some View {
+                Button("Continue") { login() }
+                    .liveUITag(id: "Button@ContentView.swift#1", type: "Button", file: "ContentView.swift", path: "1")
+            }
+        }
+        """
+        let index = SourceIndexer.index(source: source, filePath: "ContentView.swift")
+        let button = try XCTUnwrap(firstNode(named: "Button", in: index.roots))
+
+        // Drag: adds the first-ever .offset(x:,y:) on this view.
+        let addOffset = Mutation.addModifier(
+            target: button.id, modifierName: "offset",
+            arguments: [MutationArgument(label: "x", value: .integer(0)), MutationArgument(label: "y", value: .integer(34))]
+        )
+        let (afterOffset, _) = try MutationEngine.apply(addOffset, toSource: source, filePath: "ContentView.swift")
+        XCTAssertTrue(afterOffset.contains(".offset(x: 0, y: 34)"))
+        XCTAssertTrue(
+            afterOffset.range(of: ".offset(x: 0, y: 34)")!.lowerBound < afterOffset.range(of: ".liveUITag(")!.lowerBound,
+            "the new .offset must land BEFORE .liveUITag in the chain, not after it"
+        )
+
+        // Resize: adds the first-ever .frame(width:,height:) on this
+        // same view, on top of the already-added .offset.
+        let indexAfterOffset = SourceIndexer.index(source: afterOffset, filePath: "ContentView.swift")
+        let buttonAfterOffset = try XCTUnwrap(firstNode(named: "Button", in: indexAfterOffset.roots))
+        let addFrame = Mutation.addModifier(
+            target: buttonAfterOffset.id, modifierName: "frame",
+            arguments: [MutationArgument(label: "width", value: .integer(100)), MutationArgument(label: "height", value: .integer(32))]
+        )
+        let (final, _) = try MutationEngine.apply(addFrame, toSource: afterOffset, filePath: "ContentView.swift")
+
+        XCTAssertTrue(final.contains(".offset(x: 0, y: 34)"), "the earlier offset mutation must survive untouched")
+        XCTAssertTrue(final.contains(".frame(width: 100, height: 32)"))
+        XCTAssertTrue(
+            final.range(of: ".frame(width: 100, height: 32)")!.lowerBound < final.range(of: ".liveUITag(")!.lowerBound,
+            "the new .frame must also land BEFORE .liveUITag — .liveUITag must still be the outermost/last call"
+        )
+        XCTAssertTrue(final.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(")"), "sanity: still valid-looking trailing syntax")
+    }
+
     func testMutationOnStaleTargetThrowsRatherThanCorrupting() {
         let source = """
         struct ContentView: View {

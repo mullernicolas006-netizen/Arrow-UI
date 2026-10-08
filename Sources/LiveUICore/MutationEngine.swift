@@ -47,9 +47,10 @@ public enum MutationEngine {
             guard let node = SwiftSyntaxEngine.resolve(target, in: index) else {
                 throw SwiftSyntaxEngineError.nodeNotFound(target)
             }
-            let outermost = SwiftSyntaxEngine.outermostChainedExpr(startingFrom: node.callExpression)
-            let newExpr = try SwiftSyntaxEngine.appendingModifier(to: outermost, modifierName: modifierName, arguments: arguments)
-            return rewrite(index: index, targetID: outermost.id, replacement: ExprSyntax(newExpr), filePath: filePath)
+            let (targetID, replacement) = try SwiftSyntaxEngine.appendingModifierKeepingLiveUITagOutermost(
+                startingFrom: node.callExpression, modifierName: modifierName, arguments: arguments
+            )
+            return rewrite(index: index, targetID: targetID, replacement: replacement, filePath: filePath)
         }
     }
 

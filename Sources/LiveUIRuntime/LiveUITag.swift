@@ -29,7 +29,21 @@ public struct LiveUITagModifier: ViewModifier {
 
     public func body(content: Content) -> some View {
         let liveOffset = previewStore.offsets[id] ?? .zero
+        let liveScale = previewStore.scales[id]
         content
+            // The resize counterpart of the offset preview below: a pure
+            // render-time scale, anchored at whichever corner is
+            // opposite the handle being dragged, so that corner stays
+            // visually fixed while the view grows/shrinks live from it —
+            // no real layout pass, just a transform, cheap enough to
+            // apply on every drag tick. Applied *before* offset/the
+            // geometry reader, same reasoning as the offset preview.
+            .scaleEffect(
+                x: liveScale?.scaleX ?? 1,
+                y: liveScale?.scaleY ?? 1,
+                anchor: UnitPoint(x: CGFloat(liveScale?.anchorX ?? 0.5), y: CGFloat(liveScale?.anchorY ?? 0.5))
+            )
+            .animation(.linear(duration: 0.05), value: liveScale)
             // Applied to `content` *before* the geometry reader below, so
             // the reported geometry also reflects the live nudge — the
             // desktop app's own selection box and hit-testing stay in

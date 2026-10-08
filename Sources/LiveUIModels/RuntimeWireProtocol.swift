@@ -64,5 +64,15 @@ public enum BridgeMessage: Codable, Sendable {
     /// and therefore two separate renders, per drag tick, which was
     /// visibly less smooth than a single combined update.
     case previewOffset(nodeID: String, x: Double, y: Double)
+    /// An in-flight resize preview — the resize counterpart of
+    /// `previewOffset`. Applied as a transient `.scaleEffect`, anchored
+    /// at the corner *opposite* the handle being dragged (so that corner
+    /// stays visually fixed while the dragged corner grows/shrinks with
+    /// the cursor), the same purely-compositor-level technique design
+    /// tools like Figma use for live interactive resize — cheap enough
+    /// to apply every drag tick with no real layout pass, with the true
+    /// `.frame(width:,height:)` only written once the gesture ends.
+    /// `anchorX`/`anchorY` are `UnitPoint` components (0...1).
+    case previewScale(nodeID: String, scaleX: Double, scaleY: Double, anchorX: Double, anchorY: Double)
     case clearPreview
 }

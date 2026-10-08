@@ -16,7 +16,16 @@ import LiveUIModels
 /// place regardless of window size.
 struct OverlayView: View {
     @EnvironmentObject var state: AppState
-    @StateObject private var mirror = SimulatorScreenMirror()
+    // Default interval (0.5s) was the real cause of the canvas feeling
+    // less smooth than the actual Simulator/preview during a drag —
+    // not any missing `.animation()` here. The outline box itself tracks
+    // the raw mouse translation every tick, same as any native macOS
+    // drag, with no network round-trip and nothing to smooth; the
+    // *screenshot behind it* was only refreshing twice a second, so the
+    // content looked like it was skipping ahead in steps while the box
+    // moved continuously. See `SimulatorScreenMirror`'s own doc comment
+    // for the still-image-polling tradeoff this is tuning, not replacing.
+    @StateObject private var mirror = SimulatorScreenMirror(interval: 0.1)
     @State private var dragStartRuntimeID: String?
     @State private var dragTranslation: CGSize = .zero
     /// The innermost view currently under the mouse (hit-tested the same
@@ -209,6 +218,15 @@ struct OverlayView: View {
 
         var isLeft: Bool { self == .topLeft || self == .bottomLeft }
         var isTop: Bool { self == .topLeft || self == .topRight }
+
+        /// The corner that must stay visually fixed while *this* corner
+        /// grows/shrinks with the cursor — `UnitPoint` components (0...1)
+        /// for `.scaleEffect(anchor:)`. The local preview rect
+        /// (`resizedRect`), the live bridge-streamed scale preview, and
+        /// the real `.frame`/`.offset` mutation math all agree this is
+        /// "opposite the dragged corner": dragging `.topLeft` anchors
+        /// bottom-trailing (1, 1), etc.
+        var anchorUnitPoint: (x: Double, y: Double) { (isLeft ? 1 : 0, isTop ? 1 : 0) }
     }
 
     /// `rect` adjusted for the in-flight resize translation, purely for
@@ -405,15 +423,19 @@ struct OverlayView: View {
     /// A resize writes `.frame(width:, height:)` (and, for top/left
     /// handles, also `.offset(x:, y:)` so the opposite corner stays
     /// anchored) — exactly like `offsetMutation`, never a spacing/padding
-    /// hack, so it can never affect a sibling. Unlike the move-drag path,
-    /// it doesn't stream a live preview over the bridge — only the local
-    /// outline previews the resize in flight. Adding that hit a real
-    /// composition problem a move-drag doesn't: a repeated resize's live
-    /// override would need to apply *outside* whatever `.frame()` a
-    /// previous resize's rebuild already compiled in, but `.liveUITag`
-    /// sits *inside* the modifier chain, so a second live-preview resize
-    /// would just get re-constrained by the already-compiled outer
-    /// `.frame()`. Left as a known gap (see ARCHITECTURE.md).
+    /// hack, so it can never affect a sibling. Like the move-drag path,
+    /// it also streams a live preview over the bridge on every tick
+    /// (`.previewScale`, applied as a transient `.scaleEffect` anchored
+    /// at the corner opposite the dragged handle) — no real layout pass
+    /// per tick, just a cheap transform, same technique Figma/Sketch use
+    /// under the hood for live interactive resize. This only works
+    /// correctly because `MutationEngine`'s `.addModifier` now keeps
+    /// `.liveUITag` outermost in the chain (see
+    /// `SwiftSyntaxEngine.appendingModifierKeepingLiveUITagOutermost`):
+    /// a *second* resize's live override needs to apply *outside*
+    /// whatever `.frame()` a previous resize's rebuild already compiled
+    /// in, and that only holds if `.liveUITag` never ends up buried
+    /// inside an earlier mutation's modifier.
     private func dragGesture(transform: CanvasTransform) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
@@ -442,8 +464,20 @@ struct OverlayView: View {
                     }
                 }
 
-                if resizingRuntimeID != nil {
+                if let id = resizingRuntimeID, let handle = resizeHandle {
                     resizeTranslation = value.translation
+                    if let geometry = state.runtimeGeometry[id], transform.scale > 0, geometry.width > 0, geometry.height > 0 {
+                        let deltaX = value.translation.width / transform.scale
+                        let deltaY = value.translation.height / transform.scale
+                        let widthDelta = handle.isLeft ? -deltaX : deltaX
+                        let heightDelta = handle.isTop ? -deltaY : deltaY
+                        let scaleX = max(1, geometry.width + widthDelta) / geometry.width
+                        let scaleY = max(1, geometry.height + heightDelta) / geometry.height
+                        let anchor = handle.anchorUnitPoint
+                        // Deliberately no print() here — same per-tick
+                        // flood risk as the move-drag preview below.
+                        state.sendPreview(.previewScale(nodeID: id, scaleX: scaleX, scaleY: scaleY, anchorX: anchor.x, anchorY: anchor.y))
+                    }
                     return
                 }
 
@@ -488,17 +522,34 @@ struct OverlayView: View {
                     let heightDelta = handle.isTop ? -deltaY : deltaY
                     print("[LiveUI] canvas: resize ended on \(id) via \(handle), translation=\(value.translation) -> width delta=\(widthDelta), height delta=\(heightDelta)")
 
+                    var mutated = false
                     if abs(widthDelta) >= 1 {
                         applySize(hitID: id, axis: .horizontal, delta: widthDelta)
+                        mutated = true
                     }
                     if handle.isLeft, abs(deltaX) >= 1 {
                         applyOffset(hitID: id, axis: .horizontal, delta: deltaX)
                     }
                     if abs(heightDelta) >= 1 {
                         applySize(hitID: id, axis: .vertical, delta: heightDelta)
+                        mutated = true
                     }
                     if handle.isTop, abs(deltaY) >= 1 {
                         applyOffset(hitID: id, axis: .vertical, delta: deltaY)
+                    }
+
+                    // A real resize leaves the live scale preview exactly
+                    // where it was — same reasoning as the move-drag's
+                    // live offset preview below: it bridges smoothly into
+                    // the rebuild/relaunch now in flight, since the
+                    // relaunched app is a fresh process where this
+                    // transient state no longer exists anyway, replaced
+                    // by the newly-compiled real `.frame()`/`.offset()`.
+                    // A no-op resize (below threshold on both axes) wrote
+                    // nothing to source, so the preview has to be
+                    // reverted here instead.
+                    if !mutated {
+                        state.sendPreview(.clearPreview)
                     }
                     return
                 }

@@ -73,14 +73,29 @@ image and the geometry boxes are pixel-aligned regardless of window size.
 
 What this deliberately does *not* do yet:
 
-- **It's a still-image poll, not video.** A few frames per second at
-  most. If that feels too choppy in practice, the documented upgrade path
-  is [`idb`](https://github.com/facebook/idb) (Meta's iOS Development
-  Bridge) — it already solved real-time Simulator streaming using private
-  CoreSimulator frame-buffer APIs, and is a maintained, swappable
-  replacement for just the polling loop in `SimulatorScreenMirror`; it
-  was deliberately *not* used for this first pass so the core
-  click/drag-to-mutate loop has zero risky/private-API dependencies.
+- **It's a still-image poll, not video.** Real testing surfaced this as a
+  concrete, reported complaint, not just a theoretical one: "the preview
+  [the real Simulator view, moving live via the bridge] is buttery
+  smooth, but Arrow's own canvas isn't" — and the cause was specifically
+  this poll interval, not anything about how the canvas box itself is
+  drawn. `OverlayView`'s outline box is driven directly by the raw
+  per-tick gesture translation, same as any native macOS drag, with no
+  network round-trip and nothing to smooth — adding an `.animation()`
+  there would only add artificial lag behind the cursor, not help. What
+  *was* choppy was the **screenshot behind the box**: at the original
+  0.5s default interval, the mirrored content only refreshed twice a
+  second while the box moved continuously every tick, so the content
+  visibly lagged/jumped behind an already-smooth outline. Lowered to
+  0.1s at `OverlayView`'s call site. Still a still-image poll, and still
+  a few more `xcrun simctl` subprocess spawns per second as the
+  tradeoff — if that feels too choppy or too expensive in practice, the
+  documented upgrade path is [`idb`](https://github.com/facebook/idb)
+  (Meta's iOS Development Bridge) — it already solved real-time
+  Simulator streaming using private CoreSimulator frame-buffer APIs, and
+  is a maintained, swappable replacement for just the polling loop in
+  `SimulatorScreenMirror`; it was deliberately *not* used for this first
+  pass so the core click/drag-to-mutate loop has zero risky/private-API
+  dependencies.
 - **The real view moves live during a drag, via the bridge — not touch
   injection.** `RuntimeWireProtocol.BridgeMessage` already had cases
   reserved for exactly this from early on (§25), but nothing sent or
@@ -181,18 +196,58 @@ What this deliberately does *not* do yet:
   offset mutations, applied sequentially the same way a diagonal
   move-drag already does.
 
-  Only the local outline previews a resize in flight — unlike a move,
-  this doesn't yet stream a live preview to the real running view over
-  the bridge. That hits a genuine composition problem a move doesn't: a
-  *second* resize's live override would need to apply *outside*
-  whatever `.frame()` a previous resize's rebuild already compiled in,
-  but `.liveUITag` sits *inside* the modifier chain (it wraps the raw
-  view before any `.frame()`/`.offset()` written after it in source), so
-  a repeat live-preview resize would just get re-constrained by the
-  already-compiled outer `.frame()` and visually do nothing. Left
-  unsolved rather than worked around; the real result still shows up
-  correctly after the gesture ends and the auto-rebuild completes, same
-  as every other mutation.
+  **A resize now streams a live preview to the real running view, like a
+  move does** — `BridgeMessage.previewScale(nodeID:scaleX:scaleY:
+  anchorX:anchorY:)`, applied in `LiveUITagModifier` as a transient
+  `.scaleEffect`, anchored at the corner *opposite* the handle being
+  dragged (`ResizeHandle.anchorUnitPoint`) so that corner stays visually
+  fixed while the dragged corner grows/shrinks — the same
+  purely-compositor-level technique design tools like Figma use for
+  live interactive resize: no real layout pass per tick, just a
+  transform, computed on the desktop side from the handle's translation
+  and the view's current measured `RuntimeGeometry`. `OverlayView`
+  sends it on every tick while `resizingRuntimeID` is set, and — like
+  the move preview — leaves it in place on a real resize (bridging
+  smoothly into the rebuild/relaunch now in flight) or sends
+  `.clearPreview` on a no-op one. `LiveUIPreviewStore.apply(.clearPreview)`
+  now clears both `offsets` and `scales`.
+
+  This used to be a known, deliberately-left gap, for a real reason: a
+  *second* resize's live override needs to apply *outside* whatever
+  `.frame()` a previous resize's rebuild already compiled in, but
+  `.liveUITag` sat *inside* the modifier chain (every `.frame()`/
+  `.offset()` written by `addModifier` landed *after* it), so a repeat
+  live-preview resize would've just gotten re-constrained by the
+  already-compiled outer `.frame()`. That composition problem is also
+  what caused the bug below — fixing the real root cause (keeping
+  `.liveUITag` outermost) is what unblocked building this.
+
+  **Real bug found from testing after the `selectedRuntimeID` fix:
+  resize mutations were correctly written and the compiled view *did*
+  visually resize, but every resize looked like it only moved, never
+  grew.** Root cause: `MutationEngine`'s `.addModifier` case appended
+  new modifiers at the chain's literal outermost point
+  (`SwiftSyntaxEngine.outermostChainedExpr`) — which, for any view whose
+  *first-ever* offset/resize mutation had already run, meant the new
+  modifier landed *after* `.liveUITag`, pushing it one level further
+  inside the chain. `.liveUITag`'s own `GeometryReader` (in
+  `.background`) measures the view's rendered size **at its position in
+  the chain**, not the view's eventual fully-modified geometry — so once
+  `.liveUITag` was inside a `.frame(width:,height:)` the reported
+  `RuntimeGeometry` never reflected the new size at all. The *only*
+  thing that visibly changed was `x`/`y`, because `.frame()`'s default
+  behavior re-centers its (reported, unchanged-size) content within the
+  new bounding box — which reads as "dragging a handle moves the view
+  but never makes it bigger," exactly what real testing showed.
+
+  Fixed with `SwiftSyntaxEngine.appendingModifierKeepingLiveUITagOutermost`
+  (used by `MutationEngine`'s `.addModifier` case instead of
+  `appendingModifier` directly): when the chain's outermost call is
+  `.liveUITag(...)`, the new modifier is inserted *just inside* it
+  (rebuilding the `.liveUITag(...)` call with a new base) rather than
+  outside it, so `.liveUITag` stays outermost across every future
+  mutation on that view, not just its first. Covered by
+  `MutationEngineTests.testLiveUITagStaysOutermostAcrossDragThenResize`.
 
   Also not yet done: edge (non-corner) handles for resizing one
   dimension at a time, and handles on a `ZStack`-free-form vs. stack

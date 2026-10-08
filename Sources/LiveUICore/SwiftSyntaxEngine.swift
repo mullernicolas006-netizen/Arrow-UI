@@ -324,6 +324,50 @@ public enum SwiftSyntaxEngine {
 
     // MARK: - Adding a new modifier (§18-19, §69)
 
+    /// Appends a new trailing modifier to `call`'s chain, keeping an
+    /// existing `.liveUITag(...)` call outermost instead of letting the
+    /// new modifier land outside (after) it.
+    ///
+    /// `.liveUITag`'s own `GeometryReader` measures the view's rendered
+    /// geometry *at its exact position in the modifier chain* — not the
+    /// view's eventual, fully-modified geometry. A modifier appended
+    /// after it (e.g. a resize's `.frame(...)`) changes what the compiled
+    /// view actually looks like without that ever reaching the reported
+    /// `RuntimeGeometry`. This was a real, confirmed bug: a resize
+    /// correctly wrote `.frame(width:,height:)` and the compiled view
+    /// visibly grew, but the desktop canvas — driven entirely by
+    /// `RuntimeGeometry` — only ever showed a small position shift (from
+    /// `.frame`'s default re-centering of its still-unchanged-size
+    /// content), never an actual size change, because the view's
+    /// first-ever offset/frame mutation had already pushed `.liveUITag`
+    /// one level further inside the chain. Every `addModifier` mutation
+    /// must go through this, not `appendingModifier` directly, so the
+    /// invariant ("liveUITag is always the outermost call") holds from a
+    /// view's very first mutation onward and never regresses.
+    ///
+    /// Returns the node to replace in the tree and its replacement:
+    /// when `.liveUITag` has to stay outermost, the node that actually
+    /// changes is the *existing* `.liveUITag(...)` call itself (rebuilt
+    /// with a new base), not the chain's literal outermost call.
+    public static func appendingModifierKeepingLiveUITagOutermost(
+        startingFrom call: FunctionCallExprSyntax,
+        modifierName: String,
+        arguments: [MutationArgument]
+    ) throws -> (target: SyntaxIdentifier, replacement: ExprSyntax) {
+        let outermost = outermostChainedExpr(startingFrom: call)
+        guard let outerCall = outermost.as(FunctionCallExprSyntax.self),
+              let member = outerCall.calledExpression.as(MemberAccessExprSyntax.self),
+              member.declName.baseName.text == "liveUITag",
+              let base = member.base else {
+            let newExpr = try appendingModifier(to: outermost, modifierName: modifierName, arguments: arguments)
+            return (outermost.id, ExprSyntax(newExpr))
+        }
+        let newBase = try appendingModifier(to: base, modifierName: modifierName, arguments: arguments)
+        let newMember = member.with(\.base, ExprSyntax(newBase))
+        let newOuterCall = outerCall.with(\.calledExpression, ExprSyntax(newMember))
+        return (outerCall.id, ExprSyntax(newOuterCall))
+    }
+
     /// Appends a new trailing modifier call, e.g. turning `Text("Title")`
     /// into `Text("Title")\n    .padding(12)`.
     ///

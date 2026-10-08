@@ -17,9 +17,27 @@ import LiveUIModels
 /// rebuild finishes — relaunching is a fresh process, so this transient
 /// state is simply gone, replaced by the new compiled `.offset()` that
 /// now bakes in the same value for real.
+/// A view's in-flight resize preview: a scale factor plus the corner
+/// it should grow/shrink *away from* (the corner opposite whichever
+/// handle is being dragged, which must stay visually fixed).
+public struct LiveUIPreviewScale: Equatable, Sendable {
+    public var scaleX: Double
+    public var scaleY: Double
+    public var anchorX: Double
+    public var anchorY: Double
+
+    public init(scaleX: Double, scaleY: Double, anchorX: Double, anchorY: Double) {
+        self.scaleX = scaleX
+        self.scaleY = scaleY
+        self.anchorX = anchorX
+        self.anchorY = anchorY
+    }
+}
+
 @MainActor
 public final class LiveUIPreviewStore: ObservableObject {
     @Published public var offsets: [String: CGSize] = [:]
+    @Published public var scales: [String: LiveUIPreviewScale] = [:]
 
     public init() {}
 
@@ -37,8 +55,11 @@ public final class LiveUIPreviewStore: ObservableObject {
             // not a bug in this mechanism, which the same flooded log
             // actually proved was working correctly.
             offsets[nodeID] = CGSize(width: x, height: y)
+        case .previewScale(let nodeID, let scaleX, let scaleY, let anchorX, let anchorY):
+            scales[nodeID] = LiveUIPreviewScale(scaleX: scaleX, scaleY: scaleY, anchorX: anchorX, anchorY: anchorY)
         case .clearPreview:
             offsets.removeAll()
+            scales.removeAll()
         case .requestSnapshot:
             break
         }
